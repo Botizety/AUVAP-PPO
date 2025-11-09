@@ -14,12 +14,29 @@ No network access or active scanning is performed - operates solely on local fil
 """
 
 import csv
+import hashlib
 import json
 import sys
 import xml.etree.ElementTree as ET
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
+
+
+@dataclass
+class DataQuality:
+    """
+    Tracks data quality and provenance for vulnerability findings.
+    
+    Attributes:
+        missing_fields: List of field names that were empty in original data
+        imputed_fields: List of field names that were enriched/computed
+        source: Authoritative source of the data (scanner, nvd_api, llm, computed)
+    """
+    missing_fields: list[str] = field(default_factory=list)
+    imputed_fields: list[str] = field(default_factory=list)
+    source: str = "scanner"
 
 
 @dataclass
@@ -43,6 +60,9 @@ class VAFinding:
         remediation: Recommended solution/fix
         raw_plugin_id: Nessus plugin ID
         raw_plugin_family: Plugin family category
+        finding_id: Deterministic hash for deduplication (computed in __post_init__)
+        data_quality: Data quality and provenance tracking
+        timestamp: When the finding was parsed/created
     """
     host_ip: str
     hostname: str
@@ -59,6 +79,16 @@ class VAFinding:
     remediation: str
     raw_plugin_id: str
     raw_plugin_family: str
+    finding_id: str = field(init=False)
+    data_quality: DataQuality = field(default_factory=DataQuality)
+    timestamp: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+    
+    def __post_init__(self):
+        """Compute deterministic finding_id using SHA-1 hash."""
+        # Create deterministic ID: H(host_ip || service || port || cve)
+        cve_value = self.cve if self.cve else "NOCVE"
+        id_string = f"{self.host_ip}|{self.service}|{self.port}|{cve_value}"
+        self.finding_id = hashlib.sha1(id_string.encode('utf-8')).hexdigest()
 
 
 def _safe_get_text(element: Optional[ET.Element], default: str = "") -> str:
@@ -306,7 +336,7 @@ def parse_csv(csv_path: str) -> list[VAFinding]:
     return findings
 
 
-def parse_report(file_path: str) -> list[VAFinding]:
+def parse_report(file_path: str, deduplicate: bool = True) -> list[VAFinding]:
     """
     Auto-detect file format and parse vulnerability report.
     
@@ -316,9 +346,10 @@ def parse_report(file_path: str) -> list[VAFinding]:
     
     Args:
         file_path: Path to report file
+        deduplicate: Whether to deduplicate findings by finding_id (default: True)
         
     Returns:
-        List of VAFinding objects
+        List of VAFinding objects (deduplicated if requested)
         
     Raises:
         ValueError: If file format is unsupported
@@ -326,12 +357,34 @@ def parse_report(file_path: str) -> list[VAFinding]:
     path = Path(file_path)
     suffix = path.suffix.lower()
     
+    # Parse based on format
     if suffix in ['.xml', '.nessus']:
-        return parse_nessus_xml(file_path)
+        raw_findings = parse_nessus_xml(file_path)
     elif suffix == '.csv':
-        return parse_csv(file_path)
+        raw_findings = parse_csv(file_path)
     else:
         raise ValueError(f"Unsupported file format: {suffix}. Use .xml, .nessus, or .csv")
+    
+    raw_count = len(raw_findings)
+    
+    # Apply deduplication if requested
+    if deduplicate:
+        findings = deduplicate_findings(raw_findings)
+    else:
+        findings = raw_findings
+    
+    # Calculate and emit metrics
+    imputed_count = sum(1 for f in findings if f.data_quality.imputed_fields)
+    metrics = calculate_normalization_metrics(raw_count, len(findings), imputed_count)
+    
+    print(f"[METRICS] Phase 1 Normalization:", file=sys.stderr)
+    print(f"  Raw findings: {metrics['raw_findings']}", file=sys.stderr)
+    print(f"  Normalized findings: {metrics['normalized_findings']}", file=sys.stderr)
+    print(f"  Deduplication removed: {metrics['deduplication_count']}", file=sys.stderr)
+    print(f"  Normalization efficiency (η): {metrics['normalization_efficiency']:.3f}", file=sys.stderr)
+    print(f"  Imputation rate (λ): {metrics['imputation_rate']:.3f}", file=sys.stderr)
+    
+    return findings
 
 
 def to_dict_list(findings: list[VAFinding]) -> list[dict]:
@@ -347,6 +400,89 @@ def to_dict_list(findings: list[VAFinding]) -> list[dict]:
         List of dictionaries with the same structure
     """
     return [asdict(finding) for finding in findings]
+
+
+def deduplicate_findings(findings: list[VAFinding]) -> list[VAFinding]:
+    """
+    Deduplicate findings by finding_id, keeping the "best" version per group.
+    
+    Selection criteria (in order of precedence):
+    1. Most recent timestamp
+    2. Highest CVSS score (if timestamps equal)
+    3. Richest data_quality provenance (most imputed fields indicates more enrichment)
+    
+    Args:
+        findings: List of VAFinding objects (may contain duplicates)
+        
+    Returns:
+        Deduplicated list with one finding per unique finding_id
+    """
+    from collections import defaultdict
+    
+    # Group findings by finding_id
+    groups: dict[str, list[VAFinding]] = defaultdict(list)
+    for finding in findings:
+        groups[finding.finding_id].append(finding)
+    
+    deduplicated = []
+    
+    for finding_id, group in groups.items():
+        if len(group) == 1:
+            deduplicated.append(group[0])
+        else:
+            # Multiple findings with same ID - select best
+            best = group[0]
+            for candidate in group[1:]:
+                # 1. Most recent timestamp
+                if candidate.timestamp > best.timestamp:
+                    best = candidate
+                    continue
+                elif candidate.timestamp < best.timestamp:
+                    continue
+                
+                # 2. Highest CVSS (if timestamps equal)
+                candidate_cvss = candidate.cvss or 0.0
+                best_cvss = best.cvss or 0.0
+                if candidate_cvss > best_cvss:
+                    best = candidate
+                    continue
+                elif candidate_cvss < best_cvss:
+                    continue
+                
+                # 3. Richest provenance (more imputed fields = more enriched)
+                if len(candidate.data_quality.imputed_fields) > len(best.data_quality.imputed_fields):
+                    best = candidate
+            
+            deduplicated.append(best)
+    
+    return deduplicated
+
+
+def calculate_normalization_metrics(raw_count: int, normalized_count: int, imputed_count: int) -> dict:
+    """
+    Calculate normalization and data quality metrics.
+    
+    Args:
+        raw_count: Number of raw input findings
+        normalized_count: Number of normalized output findings
+        imputed_count: Number of findings with imputed/enriched fields
+        
+    Returns:
+        Dictionary with keys:
+            - normalization_efficiency (η_norm): Compression ratio |output| / |input|
+            - imputation_rate (λ_impute): Proportion of findings with enrichment
+            - deduplication_count: Number of duplicates removed
+    """
+    dedup_count = raw_count - normalized_count
+    
+    return {
+        "normalization_efficiency": normalized_count / raw_count if raw_count > 0 else 0.0,
+        "imputation_rate": imputed_count / normalized_count if normalized_count > 0 else 0.0,
+        "deduplication_count": dedup_count,
+        "raw_findings": raw_count,
+        "normalized_findings": normalized_count,
+        "imputed_findings": imputed_count
+    }
 
 
 def main() -> None:
