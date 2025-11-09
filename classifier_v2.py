@@ -63,18 +63,30 @@ def _extract_json_object(text: str) -> str:
 
 
 
-def build_classification_prompt(finding: dict, business_context: Optional[dict] = None) -> str:
+def build_classification_prompt(finding: dict, business_context: Optional[dict] = None,
+                               few_shot_examples: Optional[str] = None) -> str:
     """
     Build a focused classification prompt for any LLM.
     
     Args:
         finding: Dictionary from parser.to_dict_list()
         business_context: Optional business rules and environment context
+        few_shot_examples: Optional formatted few-shot examples
         
     Returns:
         Prompt string requesting structured JSON response
     """
     cvss_str = f"{finding.get('cvss')}" if finding.get('cvss') is not None else "N/A"
+    
+    # Truncate description to 500 chars (Phase 3 requirement)
+    description = finding.get('description', '')
+    if len(description) > 500:
+        description = description[:497] + "..."
+    
+    # Truncate evidence to 300 chars
+    evidence = finding.get('evidence', '')
+    if len(evidence) > 300:
+        evidence = evidence[:297] + "..."
     
     # Build business context section
     context_rules = ""
@@ -89,18 +101,23 @@ def build_classification_prompt(finding: dict, business_context: Optional[dict] 
         if business_context.get('custom_notes'):
             context_rules += f"- NOTES: {business_context['custom_notes']}\n"
     
+    # Build few-shot examples section (Phase 3)
+    examples_section = ""
+    if few_shot_examples:
+        examples_section = "\n" + few_shot_examples + "\n"
+    
     prompt = f"""You are a security analyst performing vulnerability triage in a controlled lab environment.
 You are NOT launching exploits - only classifying vulnerability data for automated testing feasibility.
 {context_rules}
-Analyze this vulnerability finding:
+{examples_section}Analyze this vulnerability finding:
 
 HOST: {finding.get('host_ip')} ({finding.get('hostname')})
 PORT: {finding.get('port')}/{finding.get('protocol')}
 SERVICE: {finding.get('service')}
 CVSS: {cvss_str}
 TITLE: {finding.get('title')}
-DESCRIPTION: {finding.get('description', '')[:500]}
-EVIDENCE: {finding.get('evidence', '')[:300]}
+DESCRIPTION: {description}
+EVIDENCE: {evidence}
 
 Respond with ONLY valid JSON (no markdown, no code blocks):
 
@@ -124,7 +141,8 @@ Rules:
 def _classify_with_openai_sdk(finding: dict, api_key: str,
                                base_url: str = "https://api.openai.com/v1",
                                model: str = "gpt-4o-mini",
-                               business_context: Optional[dict] = None) -> dict:
+                               business_context: Optional[dict] = None,
+                               few_shot_examples: Optional[str] = None) -> dict:
     """
     Classify using OpenAI SDK (supports OpenAI, GitHub Models, Azure OpenAI).
     
@@ -134,6 +152,7 @@ def _classify_with_openai_sdk(finding: dict, api_key: str,
         base_url: API endpoint (GitHub: https://models.inference.ai.azure.com)
         model: Model name
         business_context: Optional business rules and environment context
+        few_shot_examples: Optional formatted few-shot examples
         
     Returns:
         Classification dict with all required fields
@@ -144,7 +163,7 @@ def _classify_with_openai_sdk(finding: dict, api_key: str,
         raise ImportError("openai package not installed. Run: pip install openai")
     
     client = OpenAI(api_key=api_key, base_url=base_url)
-    prompt = build_classification_prompt(finding, business_context)
+    prompt = build_classification_prompt(finding, business_context, few_shot_examples)
     
     response = client.chat.completions.create(
         model=model,
@@ -181,7 +200,8 @@ def _classify_with_openai_sdk(finding: dict, api_key: str,
 
 
 def _classify_with_gemini(finding: dict, api_key: str,
-                          business_context: Optional[dict] = None) -> dict:
+                          business_context: Optional[dict] = None,
+                          few_shot_examples: Optional[str] = None) -> dict:
     """
     Classify using Google Gemini API.
     
@@ -189,6 +209,7 @@ def _classify_with_gemini(finding: dict, api_key: str,
         finding: Dictionary from parser
         api_key: Google API key
         business_context: Optional business rules and environment context
+        few_shot_examples: Optional formatted few-shot examples
         
     Returns:
         Classification dict with all required fields
@@ -200,7 +221,7 @@ def _classify_with_gemini(finding: dict, api_key: str,
         raise ImportError("google-genai package not installed. Run: pip install google-genai")
     
     client = genai.Client(api_key=api_key)
-    prompt = build_classification_prompt(finding, business_context)
+    prompt = build_classification_prompt(finding, business_context, few_shot_examples)
     
     response = client.models.generate_content(
         model='gemini-2.0-flash-exp',
@@ -282,7 +303,8 @@ def _heuristic_fallback(finding: dict) -> dict:
 def classify_single(finding: dict, provider: str = "auto",
                     api_key: Optional[str] = None,
                     model: Optional[str] = None,
-                    business_context: Optional[dict] = None) -> dict:
+                    business_context: Optional[dict] = None,
+                    few_shot_examples: Optional[str] = None) -> dict:
     """
     Classify a single finding using specified provider.
     
@@ -292,6 +314,7 @@ def classify_single(finding: dict, provider: str = "auto",
         api_key: API key (if None, reads from environment)
         model: Model name (provider-specific)
         business_context: Optional business rules and environment context
+        few_shot_examples: Optional formatted few-shot examples (Phase 3)
         
     Returns:
         Finding dict enriched with classification fields
@@ -335,15 +358,16 @@ def classify_single(finding: dict, provider: str = "auto",
                 finding, api_key,
                 base_url="https://models.inference.ai.azure.com",
                 model=model,
-                business_context=business_context
+                business_context=business_context,
+                few_shot_examples=few_shot_examples
             )
         elif provider == "gemini":
             assert api_key is not None
-            classification = _classify_with_gemini(finding, api_key, business_context)
+            classification = _classify_with_gemini(finding, api_key, business_context, few_shot_examples)
         elif provider == "openai":
             model = model or "gpt-5-nano"
             assert api_key is not None
-            classification = _classify_with_openai_sdk(finding, api_key, model=model, business_context=business_context)
+            classification = _classify_with_openai_sdk(finding, api_key, model=model, business_context=business_context, few_shot_examples=few_shot_examples)
         elif provider == "local":
             model = model or "deepseek-r1:14b"
             base_url = os.environ.get('LOCAL_OPENAI_BASE_URL') or "http://localhost:11434/v1"
@@ -353,7 +377,8 @@ def classify_single(finding: dict, provider: str = "auto",
                 api_key,
                 base_url=base_url,
                 model=model,
-                business_context=business_context
+                business_context=business_context,
+                few_shot_examples=few_shot_examples
             )
         else:
             raise ValueError(f"Unknown provider: {provider}")
@@ -395,17 +420,19 @@ def classify_single(finding: dict, provider: str = "auto",
                             finding, api_key,
                             base_url="https://models.inference.ai.azure.com",
                             model=model or "gpt-4o-mini",
-                            business_context=business_context
+                            business_context=business_context,
+                            few_shot_examples=few_shot_examples
                         )
                     elif provider == "gemini":
                         assert api_key is not None
-                        classification = _classify_with_gemini(finding, api_key, business_context)
+                        classification = _classify_with_gemini(finding, api_key, business_context, few_shot_examples)
                     elif provider == "openai":
                         assert api_key is not None
                         classification = _classify_with_openai_sdk(
                             finding, api_key, 
                             model=model or "gpt-4o-mini",
-                            business_context=business_context
+                            business_context=business_context,
+                            few_shot_examples=few_shot_examples
                         )
                     elif provider == "local":
                         assert api_key is not None
@@ -415,7 +442,8 @@ def classify_single(finding: dict, provider: str = "auto",
                             api_key,
                             base_url=base_url,
                             model=model or "deepseek-r1:14b",
-                            business_context=business_context
+                            business_context=business_context,
+                            few_shot_examples=few_shot_examples
                         )
                     
                     # Success! Return enriched finding
@@ -452,19 +480,44 @@ def classify_single(finding: dict, provider: str = "auto",
 
 def classify_findings(findings: list[dict], provider: str = "auto",
                      model: Optional[str] = None,
-                     business_context: Optional[dict] = None) -> list[dict]:
+                     business_context: Optional[dict] = None,
+                     enable_few_shot: bool = True) -> list[dict]:
     """
-    Classify a batch of findings with rate limiting.
+    Classify a batch of findings with rate limiting, metrics, and few-shot examples.
     
     Args:
         findings: List of dictionaries from parser.to_dict_list()
         provider: "gemini", "github", "openai", or "auto"
         model: Model name (provider-specific)
         business_context: Optional business rules and environment context
+        enable_few_shot: Enable dynamic few-shot example selection (Phase 3)
         
     Returns:
         List of enriched finding dictionaries
     """
+    # Initialize Phase 3 components
+    from pathlib import Path
+    
+    few_shot_selector = None
+    metrics = None
+    
+    try:
+        from phase3_enhancements import DynamicFewShotSelector, ClassificationMetrics
+        metrics = ClassificationMetrics()
+        
+        if enable_few_shot and Path("examples.json").exists():
+            try:
+                few_shot_selector = DynamicFewShotSelector()
+                print("[*] Few-shot examples enabled", file=sys.stderr)
+            except ImportError as e:
+                print(f"[WARNING] Few-shot selection disabled: {e}", file=sys.stderr)
+                few_shot_selector = None
+            except Exception as e:
+                print(f"[WARNING] Few-shot selector initialization failed: {e}", file=sys.stderr)
+                few_shot_selector = None
+    except ImportError:
+        print("[*] Phase 3 enhancements not available (metrics/few-shot disabled)", file=sys.stderr)
+    
     # Detect actual provider
     actual_provider = provider
     if provider == "auto":
@@ -513,9 +566,35 @@ def classify_findings(findings: list[dict], provider: str = "auto",
         title = finding.get('title', 'Unknown')[:50]
         print(f"[*] Classifying finding {i}/{total}: {title}...", file=sys.stderr)
         
-        classified = classify_single(finding, provider=actual_provider, model=model, 
-                                     business_context=business_context)
-        enriched.append(classified)
+        # Phase 3: Select few-shot examples if enabled
+        few_shot_text = None
+        if few_shot_selector:
+            try:
+                description = finding.get('description', '')
+                examples = few_shot_selector.select_examples(description, k=3)
+                few_shot_text = few_shot_selector.format_examples_for_prompt(examples)
+            except Exception as e:
+                print(f"      [WARNING] Few-shot selection failed: {e}", file=sys.stderr)
+        
+        # Classify with metrics tracking
+        start_time = time.time()
+        try:
+            classified = classify_single(finding, provider=actual_provider, model=model, 
+                                       business_context=business_context,
+                                       few_shot_examples=few_shot_text)
+            latency = time.time() - start_time
+            
+            # Track metrics
+            if metrics:
+                severity = classified.get('severity_bucket')
+                metrics.add_classification(latency, severity, is_valid=True)
+            
+            enriched.append(classified)
+        except Exception as e:
+            latency = time.time() - start_time
+            if metrics:
+                metrics.add_classification(latency, None, is_valid=False)
+            raise  # Re-raise to maintain existing error handling
         
         # Rate limiting: wait between requests
         # Gemini free tier: 15 requests/min = 4s between requests to be safe
@@ -527,6 +606,11 @@ def classify_findings(findings: list[dict], provider: str = "auto",
                 time.sleep(0.5)  # 0.5s for GitHub/OpenAI
     
     print(f"[+] Classified {len(enriched)} findings", file=sys.stderr)
+    
+    # Phase 3: Print metrics summary
+    if metrics:
+        metrics.print_summary()
+    
     return enriched
 
 

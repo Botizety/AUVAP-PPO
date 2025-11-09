@@ -346,7 +346,6 @@ def main() -> None:
     try:
         from policy_engine import PolicyEngine, apply_policy_filter, create_default_policy_rules, emit_policy_metrics
         from policy_loader import load_policies_from_yaml
-        from pathlib import Path
         
         # Initialize policy engine with default rules
         policy_engine = PolicyEngine()
@@ -446,13 +445,35 @@ def main() -> None:
     )
     print(f"      Classified {len(classified)} findings\n")
     
-    # Step 3: Apply feasibility filter
-    print("[3/4] Applying feasibility filter")
+    # Step 4: Apply feasibility filter
+    print("[4/6] Applying feasibility filter")
     feasible, non_feasible = feasibility_filter.split_feasible(classified)
     print(f"      Feasible: {len(feasible)} | Manual review: {len(non_feasible)}\n")
     
-    # Step 4: Generate report
-    print("[4/4] Generating experiment report")
+    # Step 5: Initialize exploit tasks (Phase 4)
+    print("[5/6] Initializing exploit tasks")
+    try:
+        import task_manager
+        
+        # Create exploit tasks from feasible findings
+        tasks = task_manager.initialize_tasks(feasible)
+        print(f"      Created {len(tasks)} exploit tasks")
+        
+        # Print task summary
+        task_manager.print_task_summary(tasks)
+        
+        # Generate task manifest
+        manifest_path = results_dir / f"tasks_manifest_{timestamp}.json"
+        task_manager.generate_task_manifest(tasks, manifest_path)
+        print(f"      Task manifest: {manifest_path}\n")
+        
+    except ImportError as e:
+        print(f"      [WARNING] Task manager not available: {e}", file=sys.stderr)
+        print("      Skipping task initialization...", file=sys.stderr)
+        print()
+    
+    # Step 6: Generate report
+    print("[6/6] Generating experiment report")
     all_findings = feasible + non_feasible
     report = generate_report(input_file, all_findings, feasible, non_feasible)
     print(f"      Report generated successfully\n")
