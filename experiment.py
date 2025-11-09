@@ -340,8 +340,58 @@ def main() -> None:
         print("[ERROR] No findings to process", file=sys.stderr)
         sys.exit(1)
     
-    # Step 2: Classify findings using LLM with business context
-    print("[2/4] Classifying findings with LLM")
+    # Step 2: Apply Policy Filter BEFORE LLM classification
+    print("[2/5] Applying organizational security policies")
+    
+    try:
+        from policy_engine import PolicyEngine, apply_policy_filter, create_default_policy_rules, emit_policy_metrics
+        from policy_loader import load_policies_from_yaml
+        from pathlib import Path
+        
+        # Initialize policy engine with default rules
+        policy_engine = PolicyEngine()
+        policy_engine.add_rules(create_default_policy_rules())
+        
+        # Load policies from configuration file if exists
+        policy_file = Path("policy_config.yaml")
+        if policy_file.exists():
+            print(f"      Loading policies from {policy_file}")
+            try:
+                yaml_rules = load_policies_from_yaml(str(policy_file))
+                policy_engine.add_rules(yaml_rules)
+                print(f"      ✅ Loaded {len(yaml_rules)} custom rules from YAML")
+            except Exception as e:
+                print(f"      [WARNING] Failed to load {policy_file}: {e}", file=sys.stderr)
+        else:
+            print(f"      Using default policies only (no {policy_file} found)")
+        
+        # Show policy summary
+        rule_types = policy_engine.get_rules_by_type()
+        print(f"      Total active rules: {policy_engine.get_rule_count()}")
+        print(f"      └─ Ignore: {rule_types['ignore']}, Force-manual: {rule_types['force_manual']}, Prioritize: {rule_types['prioritize']}")
+        print()
+        
+        # Apply policy filter
+        selected_findings, ignored_findings = apply_policy_filter(findings_dicts, policy_engine)
+        
+        # Emit metrics
+        emit_policy_metrics(selected_findings, ignored_findings)
+        print()
+        
+        if not selected_findings:
+            print("[ERROR] All findings were filtered out by policies. No findings to classify.", file=sys.stderr)
+            sys.exit(1)
+        
+        # Replace findings_dicts with policy-approved findings
+        findings_dicts = selected_findings
+        
+    except ImportError as e:
+        print(f"      [WARNING] Policy engine not available: {e}", file=sys.stderr)
+        print("      Continuing without policy filtering...", file=sys.stderr)
+        print()
+    
+    # Step 3: Classify findings using LLM with business context
+    print("[3/5] Classifying findings with LLM")
     print(f"      Environment: {business_context['environment']}")
     print(f"      Excluded ports: {business_context['excluded_ports']}")
     print(f"      Critical services: {business_context['critical_services']}")
@@ -352,7 +402,7 @@ def main() -> None:
     # Provider selection
     print("Select LLM Provider:")
     print("  1. Auto-detect (default)")
-    print("  2. OpenAI (GPT-5-nano)")
+    print("  2. OpenAI (GPT-4o-mini)")
     print("  3. Google Gemini")
     print("  4. GitHub Models")
     print("  5. Local (Ollama/LM Studio)")
