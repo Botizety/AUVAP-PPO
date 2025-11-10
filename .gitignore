@@ -50,7 +50,17 @@ results/
 
 # Logs
 *.log
+logs/
 
 # Temporary files
 *.tmp
 *.temp
+temp_cyberbattle/
+
+# Training artifacts
+checkpoints/
+knowledge_graphs/
+
+# Cache files
+cache/*.db
+*.db
