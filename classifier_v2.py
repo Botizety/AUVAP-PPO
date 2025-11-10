@@ -63,31 +63,82 @@ def _extract_json_object(text: str) -> str:
 
 
 
+def _truncate_few_shot_examples(examples: str, max_chars: int = 1500, max_examples: int = 3) -> str:
+    """
+    Truncate few-shot examples to fit within token budget.
+
+    Strategy:
+    1. Split examples by common delimiters (Example 1:, Example 2:, etc.)
+    2. Keep only first N examples (max_examples)
+    3. Truncate total length to max_chars if needed
+
+    Args:
+        examples: Formatted few-shot examples string
+        max_chars: Maximum character limit (approx 375 tokens at 4 chars/token)
+        max_examples: Maximum number of examples to include
+
+    Returns:
+        Truncated examples string
+    """
+    if not examples or len(examples) <= max_chars:
+        return examples
+
+    # Try to split by example markers
+    import re
+    # Common patterns: "Example 1:", "Example:", "---", etc.
+    example_pattern = r'(?:Example\s+\d+:|Example:|---|\n\n)'
+    parts = re.split(example_pattern, examples)
+
+    # Filter empty parts
+    parts = [p.strip() for p in parts if p.strip()]
+
+    if len(parts) <= 1:
+        # No clear delimiters, just truncate
+        truncated = examples[:max_chars - 50] + "\n\n[...additional examples truncated for brevity]"
+        return truncated
+
+    # Take first max_examples
+    selected_parts = parts[:max_examples]
+
+    # Reconstruct with "Example N:" markers
+    reconstructed = ""
+    for i, part in enumerate(selected_parts, 1):
+        reconstructed += f"Example {i}:\n{part}\n\n"
+
+    # Final length check
+    if len(reconstructed) > max_chars:
+        reconstructed = reconstructed[:max_chars - 50] + "\n[...truncated]"
+
+    return reconstructed.strip()
+
+
 def build_classification_prompt(finding: dict, business_context: Optional[dict] = None,
-                               few_shot_examples: Optional[str] = None) -> str:
+                               few_shot_examples: Optional[str] = None,
+                               max_example_chars: int = 1500) -> str:
     """
     Build a focused classification prompt for any LLM.
-    
+
     Args:
         finding: Dictionary from parser.to_dict_list()
         business_context: Optional business rules and environment context
         few_shot_examples: Optional formatted few-shot examples
-        
+        max_example_chars: Maximum characters for few-shot examples (default: 1500)
+
     Returns:
         Prompt string requesting structured JSON response
     """
     cvss_str = f"{finding.get('cvss')}" if finding.get('cvss') is not None else "N/A"
-    
+
     # Truncate description to 500 chars (Phase 3 requirement)
     description = finding.get('description', '')
     if len(description) > 500:
         description = description[:497] + "..."
-    
+
     # Truncate evidence to 300 chars
     evidence = finding.get('evidence', '')
     if len(evidence) > 300:
         evidence = evidence[:297] + "..."
-    
+
     # Build business context section
     context_rules = ""
     if business_context:
@@ -100,11 +151,12 @@ def build_classification_prompt(finding: dict, business_context: Optional[dict] 
             context_rules += f"- ENVIRONMENT: {business_context['environment']}\n"
         if business_context.get('custom_notes'):
             context_rules += f"- NOTES: {business_context['custom_notes']}\n"
-    
-    # Build few-shot examples section (Phase 3)
+
+    # Build few-shot examples section (Phase 3) with truncation
     examples_section = ""
     if few_shot_examples:
-        examples_section = "\n" + few_shot_examples + "\n"
+        truncated_examples = _truncate_few_shot_examples(few_shot_examples, max_example_chars)
+        examples_section = "\n" + truncated_examples + "\n"
     
     prompt = f"""You are a security analyst performing vulnerability triage in a controlled lab environment.
 You are NOT launching exploits - only classifying vulnerability data for automated testing feasibility.
