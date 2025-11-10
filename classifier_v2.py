@@ -190,13 +190,27 @@ def _classify_with_openai_sdk(finding: dict, api_key: str,
             response_text = response_text[4:].strip()
     
     try:
-        return json.loads(response_text)
+        classification = json.loads(response_text)
     except json.JSONDecodeError as e:
         print(f"      [DEBUG] JSON parse failed: {e}", file=sys.stderr)
         print(f"      [DEBUG] Response preview: {response_text[:300]}", file=sys.stderr)
         print(f"      [DEBUG] Attempting to extract JSON object...", file=sys.stderr)
         cleaned = _extract_json_object(response_text)
-        return json.loads(cleaned)
+        classification = json.loads(cleaned)
+
+    # Validate and fix schema
+    is_valid, errors = _validate_classification_schema(classification)
+    if not is_valid:
+        print(f"      [DEBUG] Schema validation errors: {errors}", file=sys.stderr)
+        print(f"      [DEBUG] Attempting to fix schema...", file=sys.stderr)
+        classification = _fix_classification_schema(classification, finding)
+
+        # Re-validate after fix
+        is_valid_after_fix, errors_after_fix = _validate_classification_schema(classification)
+        if not is_valid_after_fix:
+            print(f"      [WARNING] Schema still invalid after fix: {errors_after_fix}", file=sys.stderr)
+
+    return classification
 
 
 def _classify_with_gemini(finding: dict, api_key: str,
@@ -245,13 +259,198 @@ def _classify_with_gemini(finding: dict, api_key: str,
             response_text = response_text[4:].strip()
     
     try:
-        return json.loads(response_text)
+        classification = json.loads(response_text)
     except json.JSONDecodeError as e:
         print(f"      [DEBUG] Gemini JSON parse failed: {e}", file=sys.stderr)
         print(f"      [DEBUG] Response preview: {response_text[:300]}", file=sys.stderr)
         print(f"      [DEBUG] Attempting to extract JSON object...", file=sys.stderr)
         cleaned = _extract_json_object(response_text)
-        return json.loads(cleaned)
+        classification = json.loads(cleaned)
+
+    # Validate and fix schema
+    is_valid, errors = _validate_classification_schema(classification)
+    if not is_valid:
+        print(f"      [DEBUG] Schema validation errors: {errors}", file=sys.stderr)
+        print(f"      [DEBUG] Attempting to fix schema...", file=sys.stderr)
+        classification = _fix_classification_schema(classification, finding)
+
+        # Re-validate after fix
+        is_valid_after_fix, errors_after_fix = _validate_classification_schema(classification)
+        if not is_valid_after_fix:
+            print(f"      [WARNING] Schema still invalid after fix: {errors_after_fix}", file=sys.stderr)
+
+    return classification
+
+
+def _validate_classification_schema(classification: dict) -> tuple[bool, list[str]]:
+    """
+    Validate classification result against expected schema.
+
+    Required fields and constraints:
+    - severity_bucket: Must be one of [Low, Medium, High, Critical, None]
+    - attack_vector: Must be one of [Network, Adjacent, Local, Physical]
+    - vuln_component: String (required)
+    - exploit_notes: String (required)
+    - automation_candidate: Boolean (required)
+    - llm_confidence: Float 0.0-1.0 (required)
+
+    Args:
+        classification: Dict from LLM response
+
+    Returns:
+        Tuple of (is_valid, list_of_errors)
+    """
+    errors = []
+
+    # Check required fields exist
+    required_fields = [
+        'severity_bucket',
+        'attack_vector',
+        'vuln_component',
+        'exploit_notes',
+        'automation_candidate',
+        'llm_confidence'
+    ]
+
+    for field in required_fields:
+        if field not in classification:
+            errors.append(f"Missing required field: '{field}'")
+
+    # Validate severity_bucket enum
+    if 'severity_bucket' in classification:
+        valid_severities = ['Low', 'Medium', 'High', 'Critical', 'None']
+        if classification['severity_bucket'] not in valid_severities:
+            errors.append(
+                f"Invalid severity_bucket '{classification['severity_bucket']}', "
+                f"must be one of {valid_severities}"
+            )
+
+    # Validate attack_vector enum
+    if 'attack_vector' in classification:
+        valid_vectors = ['Network', 'Adjacent', 'Local', 'Physical']
+        if classification['attack_vector'] not in valid_vectors:
+            errors.append(
+                f"Invalid attack_vector '{classification['attack_vector']}', "
+                f"must be one of {valid_vectors}"
+            )
+
+    # Validate automation_candidate is boolean
+    if 'automation_candidate' in classification:
+        if not isinstance(classification['automation_candidate'], bool):
+            errors.append(
+                f"automation_candidate must be boolean, got {type(classification['automation_candidate']).__name__}"
+            )
+
+    # Validate llm_confidence is float in range [0.0, 1.0]
+    if 'llm_confidence' in classification:
+        confidence = classification['llm_confidence']
+        if not isinstance(confidence, (int, float)):
+            errors.append(
+                f"llm_confidence must be numeric, got {type(confidence).__name__}"
+            )
+        elif not (0.0 <= confidence <= 1.0):
+            errors.append(
+                f"llm_confidence must be in range [0.0, 1.0], got {confidence}"
+            )
+
+    # Validate string fields are not empty
+    string_fields = ['vuln_component', 'exploit_notes']
+    for field in string_fields:
+        if field in classification:
+            if not isinstance(classification[field], str):
+                errors.append(f"{field} must be string, got {type(classification[field]).__name__}")
+            elif not classification[field].strip():
+                errors.append(f"{field} must not be empty")
+
+    return (len(errors) == 0, errors)
+
+
+def _fix_classification_schema(classification: dict, finding: dict) -> dict:
+    """
+    Attempt to fix common schema validation errors.
+
+    Fixes applied:
+    - Set missing fields to safe defaults
+    - Normalize severity_bucket case and values
+    - Normalize attack_vector case
+    - Clamp llm_confidence to [0.0, 1.0]
+    - Convert automation_candidate to boolean
+
+    Args:
+        classification: Dict from LLM (possibly invalid)
+        finding: Original finding dict (for fallback values)
+
+    Returns:
+        Fixed classification dict
+    """
+    fixed = classification.copy()
+
+    # Fix severity_bucket
+    if 'severity_bucket' not in fixed or not fixed['severity_bucket']:
+        # Use finding severity as fallback
+        severity_text = finding.get('severity_text', 'Medium')
+        fixed['severity_bucket'] = severity_text if severity_text in ['Low', 'Medium', 'High', 'Critical', 'None'] else 'Medium'
+    else:
+        # Normalize case and common variations
+        severity = str(fixed['severity_bucket']).strip()
+        severity_map = {
+            'low': 'Low',
+            'medium': 'Medium',
+            'high': 'High',
+            'critical': 'Critical',
+            'none': 'None',
+            'info': 'None',
+            'informational': 'None'
+        }
+        fixed['severity_bucket'] = severity_map.get(severity.lower(), severity)
+
+    # Fix attack_vector
+    if 'attack_vector' not in fixed or not fixed['attack_vector']:
+        fixed['attack_vector'] = 'Network'  # Safe default
+    else:
+        # Normalize case
+        vector = str(fixed['attack_vector']).strip()
+        vector_map = {
+            'network': 'Network',
+            'adjacent': 'Adjacent',
+            'local': 'Local',
+            'physical': 'Physical',
+            'remote': 'Network',  # Common alias
+            'local network': 'Adjacent'
+        }
+        fixed['attack_vector'] = vector_map.get(vector.lower(), vector)
+
+    # Fix vuln_component
+    if 'vuln_component' not in fixed or not fixed['vuln_component']:
+        fixed['vuln_component'] = finding.get('service', 'unknown')
+
+    # Fix exploit_notes
+    if 'exploit_notes' not in fixed or not fixed['exploit_notes']:
+        fixed['exploit_notes'] = "Classification from LLM"
+
+    # Fix automation_candidate
+    if 'automation_candidate' not in fixed:
+        fixed['automation_candidate'] = False  # Conservative default
+    else:
+        # Convert to boolean if needed
+        val = fixed['automation_candidate']
+        if isinstance(val, str):
+            fixed['automation_candidate'] = val.lower() in ['true', 'yes', '1']
+        elif not isinstance(val, bool):
+            fixed['automation_candidate'] = bool(val)
+
+    # Fix llm_confidence
+    if 'llm_confidence' not in fixed:
+        fixed['llm_confidence'] = 0.5  # Neutral confidence
+    else:
+        # Ensure numeric and clamp to [0.0, 1.0]
+        try:
+            confidence = float(fixed['llm_confidence'])
+            fixed['llm_confidence'] = max(0.0, min(1.0, confidence))
+        except (ValueError, TypeError):
+            fixed['llm_confidence'] = 0.5
+
+    return fixed
 
 
 def _heuristic_fallback(finding: dict) -> dict:
