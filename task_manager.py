@@ -4,10 +4,12 @@ task_manager.py - Phase 4 Task Management
 
 Implements:
 1. Risk scoring for vulnerabilities
-2. ExploitTask dataclass for task tracking
+2. ExploitTask dataclass for task tracking with priority and attempt limits
 3. Task initialization and state management
-4. Asset grouping by host/service
-5. Task manifest generation
+4. Priority-based task queue management
+5. Attempt limit enforcement with retry logic
+6. Asset grouping by host/service
+7. Task manifest generation
 
 Integrates with feasibility_filter.py and experiment.py for Phase 4.
 """
@@ -34,7 +36,7 @@ class TaskState(Enum):
 class ExploitTask:
     """
     Represents a single exploit task for automated testing.
-    
+
     Fields:
         task_id: Unique UUID for task tracking
         finding_id: SHA-1 hash from parser.py (links to original finding)
@@ -44,6 +46,8 @@ class ExploitTask:
         target: Target specification (host:port)
         config: Configuration dict for exploit parameters
         risk_score: Calculated risk score (CVSS × surface_weight × automation_weight)
+        priority: Task priority (higher = more urgent, defaults to risk_score)
+        max_attempts: Maximum allowed attempts (default: 3)
         timestamps: Dict of state transition timestamps
         error_message: Last error message (if FAILED)
     """
@@ -55,13 +59,18 @@ class ExploitTask:
     target: str = ""
     config: Dict[str, Any] = field(default_factory=dict)
     risk_score: float = 0.0
+    priority: float = 0.0  # Higher = more urgent (defaults to risk_score)
+    max_attempts: int = 3  # Configurable attempt limit
     timestamps: Dict[str, str] = field(default_factory=dict)
     error_message: Optional[str] = None
     
     def __post_init__(self):
-        """Initialize timestamps on creation."""
+        """Initialize timestamps and priority on creation."""
         if not self.timestamps:
             self.timestamps = {"created": datetime.now().isoformat()}
+        # Default priority to risk_score if not explicitly set
+        if self.priority == 0.0 and self.risk_score > 0.0:
+            self.priority = self.risk_score
     
     def update_state(self, new_state: TaskState, error: Optional[str] = None) -> None:
         """
@@ -154,13 +163,16 @@ def compute_risk_score(finding: Dict[str, Any]) -> float:
     return round(risk_score, 2)
 
 
-def create_exploit_task(finding: Dict[str, Any]) -> ExploitTask:
+def create_exploit_task(finding: Dict[str, Any], max_attempts: int = 3,
+                       priority: Optional[float] = None) -> ExploitTask:
     """
     Create an ExploitTask from a feasible vulnerability finding.
-    
+
     Args:
         finding: Dictionary with enriched vulnerability data
-        
+        max_attempts: Maximum retry attempts (default: 3)
+        priority: Task priority (defaults to risk_score if not provided)
+
     Returns:
         ExploitTask initialized with PLANNED state
     """
@@ -194,86 +206,175 @@ def create_exploit_task(finding: Dict[str, Any]) -> ExploitTask:
         state=TaskState.PLANNED,
         target=target,
         config=config,
-        risk_score=risk_score
+        risk_score=risk_score,
+        priority=priority if priority is not None else risk_score,
+        max_attempts=max_attempts
     )
 
 
 def initialize_tasks(feasible_findings: List[Dict[str, Any]]) -> List[ExploitTask]:
     """
     Convert feasible findings to ExploitTasks.
-    
+
     Args:
         feasible_findings: List of vulnerability findings deemed feasible
-        
+
     Returns:
-        List of ExploitTask objects sorted by risk_score (descending)
+        List of ExploitTask objects sorted by priority (descending)
     """
     tasks = [create_exploit_task(finding) for finding in feasible_findings]
-    
-    # Sort by risk score (highest first)
-    tasks.sort(key=lambda t: t.risk_score, reverse=True)
-    
+
+    # Sort by priority (highest first)
+    tasks.sort(key=lambda t: t.priority, reverse=True)
+
     return tasks
+
+
+def sort_tasks_by_priority(tasks: List[ExploitTask]) -> List[ExploitTask]:
+    """
+    Sort tasks by priority (highest first).
+
+    This is the recommended way to order tasks for execution.
+    Priority defaults to risk_score but can be customized.
+
+    Args:
+        tasks: List of ExploitTask objects
+
+    Returns:
+        Sorted list (highest priority first)
+    """
+    return sorted(tasks, key=lambda t: t.priority, reverse=True)
+
+
+def should_retry_task(task: ExploitTask) -> bool:
+    """
+    Check if a task should be retried based on attempt limit.
+
+    A task should be retried if:
+    1. It's in FAILED state
+    2. Number of attempts is less than max_attempts
+
+    Args:
+        task: ExploitTask to check
+
+    Returns:
+        True if task should be retried, False otherwise
+    """
+    return task.state == TaskState.FAILED and task.attempts < task.max_attempts
+
+
+def get_retryable_tasks(tasks: List[ExploitTask]) -> List[ExploitTask]:
+    """
+    Filter tasks that can be retried and sort by priority.
+
+    Args:
+        tasks: List of ExploitTask objects
+
+    Returns:
+        List of retryable tasks sorted by priority (highest first)
+    """
+    retryable = [task for task in tasks if should_retry_task(task)]
+    return sorted(retryable, key=lambda t: t.priority, reverse=True)
+
+
+def get_planned_tasks(tasks: List[ExploitTask]) -> List[ExploitTask]:
+    """
+    Filter tasks in PLANNED state and sort by priority.
+
+    Args:
+        tasks: List of ExploitTask objects
+
+    Returns:
+        List of planned tasks sorted by priority (highest first)
+    """
+    planned = [task for task in tasks if task.state == TaskState.PLANNED]
+    return sorted(planned, key=lambda t: t.priority, reverse=True)
+
+
+def get_next_task(tasks: List[ExploitTask]) -> Optional[ExploitTask]:
+    """
+    Get the next task to execute based on priority.
+
+    Prioritizes PLANNED tasks first, then retryable FAILED tasks.
+
+    Args:
+        tasks: List of ExploitTask objects
+
+    Returns:
+        Highest priority task ready for execution, or None if no tasks available
+    """
+    # First, try to get a PLANNED task
+    planned = get_planned_tasks(tasks)
+    if planned:
+        return planned[0]  # Return highest priority planned task
+
+    # Otherwise, try to get a retryable FAILED task
+    retryable = get_retryable_tasks(tasks)
+    if retryable:
+        return retryable[0]  # Return highest priority retryable task
+
+    # No tasks available
+    return None
 
 
 def group_tasks_by_host(tasks: List[ExploitTask]) -> Dict[str, List[ExploitTask]]:
     """
     Group exploit tasks by host IP.
-    
+
     Args:
         tasks: List of ExploitTask objects
-        
+
     Returns:
         Dictionary keyed by host_ip with list of tasks per host
-        Each host's tasks are sorted by risk_score (descending)
+        Each host's tasks are sorted by priority (descending)
     """
     groups: Dict[str, List[ExploitTask]] = {}
-    
+
     for task in tasks:
         host_ip = task.config.get('host_ip', 'unknown')
-        
+
         if host_ip not in groups:
             groups[host_ip] = []
-        
+
         groups[host_ip].append(task)
-    
-    # Sort within each group by risk_score
+
+    # Sort within each group by priority
     for host_ip in groups:
-        groups[host_ip].sort(key=lambda t: t.risk_score, reverse=True)
-    
+        groups[host_ip].sort(key=lambda t: t.priority, reverse=True)
+
     return groups
 
 
 def group_tasks_by_service(tasks: List[ExploitTask]) -> Dict[Tuple[str, str], List[ExploitTask]]:
     """
     Group exploit tasks by (host_ip, service) tuple.
-    
+
     Useful for targeting same services across multiple hosts or
     multiple vulnerabilities in the same service on one host.
-    
+
     Args:
         tasks: List of ExploitTask objects
-        
+
     Returns:
         Dictionary keyed by (host_ip, service) tuple with list of tasks
-        Each group's tasks are sorted by risk_score (descending)
+        Each group's tasks are sorted by priority (descending)
     """
     groups: Dict[Tuple[str, str], List[ExploitTask]] = {}
-    
+
     for task in tasks:
         host_ip = task.config.get('host_ip', 'unknown')
         service = task.config.get('service', 'unknown')
         key = (host_ip, service)
-        
+
         if key not in groups:
             groups[key] = []
-        
+
         groups[key].append(task)
-    
-    # Sort within each group by risk_score
+
+    # Sort within each group by priority
     for key in groups:
-        groups[key].sort(key=lambda t: t.risk_score, reverse=True)
-    
+        groups[key].sort(key=lambda t: t.priority, reverse=True)
+
     return groups
 
 
