@@ -21,7 +21,7 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass, asdict, field
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple, List, Dict
 
 
 @dataclass
