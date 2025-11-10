@@ -1,0 +1,671 @@
+{
+  "metadata": {
+    "total_hosts": 5,
+    "total_vulnerabilities": 8,
+    "total_capabilities": 35,
+    "total_edges": 44
+  },
+  "nodes": [
+    {
+      "id": "10.0.1.13",
+      "type": "host",
+      "ip": "10.0.1.13",
+      "accessible": true,
+      "compromised": false,
+      "has_root": false
+    },
+    {
+      "id": "10.0.1.11",
+      "type": "host",
+      "ip": "10.0.1.11",
+      "accessible": true,
+      "compromised": false,
+      "has_root": false
+    },
+    {
+      "id": "10.0.1.7",
+      "type": "host",
+      "ip": "10.0.1.7",
+      "accessible": true,
+      "compromised": false,
+      "has_root": false
+    },
+    {
+      "id": "10.0.1.9",
+      "type": "host",
+      "ip": "10.0.1.9",
+      "accessible": true,
+      "compromised": false,
+      "has_root": false
+    },
+    {
+      "id": "10.0.1.5",
+      "type": "host",
+      "ip": "10.0.1.5",
+      "accessible": true,
+      "compromised": false,
+      "has_root": false
+    },
+    {
+      "id": "CVE-2020-1938@10.0.1.5:8009",
+      "type": "vulnerability",
+      "cve": "CVE-2020-1938",
+      "host": "10.0.1.5",
+      "port": 8009,
+      "cvss": 9.8,
+      "severity": "Critical",
+      "title": "Apache Tomcat AJP File Read Vulnerability (Ghostcat)",
+      "service": "ajp13",
+      "requires_auth": false,
+      "patched": false,
+      "has_exploit": true,
+      "script_path": "exploits\\exploits_20251111_023313\\10_0_1_5\\CVE_2020_1938_unknown.py",
+      "script_language": "python",
+      "llm_generated": true,
+      "requires_review": true
+    },
+    {
+      "id": "CVE-2021-41773@10.0.1.5:80",
+      "type": "vulnerability",
+      "cve": "CVE-2021-41773",
+      "host": "10.0.1.5",
+      "port": 80,
+      "cvss": 7.5,
+      "severity": "High",
+      "title": "Apache HTTP Path Traversal (CVE-2021-41773)",
+      "service": "http",
+      "requires_auth": false,
+      "patched": false,
+      "has_exploit": true,
+      "script_path": "exploits\\exploits_20251111_023313\\10_0_1_5\\CVE_2021_41773_unknown.py",
+      "script_language": "python",
+      "llm_generated": true,
+      "requires_review": true
+    },
+    {
+      "id": "CVE-2021-3711@10.0.1.5:443",
+      "type": "vulnerability",
+      "cve": "CVE-2021-3711",
+      "host": "10.0.1.5",
+      "port": 443,
+      "cvss": 8.1,
+      "severity": "High",
+      "title": "OpenSSL SM2 Decryption Memory Corruption (CVE-2021-3711)",
+      "service": "https",
+      "requires_auth": false,
+      "patched": false,
+      "has_exploit": true,
+      "script_path": "exploits\\exploits_20251111_023313\\10_0_1_5\\CVE_2021_3711_unknown.py",
+      "script_language": "python",
+      "llm_generated": true,
+      "requires_review": true
+    },
+    {
+      "id": "CVE-2017-0144@10.0.1.7:445",
+      "type": "vulnerability",
+      "cve": "CVE-2017-0144",
+      "host": "10.0.1.7",
+      "port": 445,
+      "cvss": 8.1,
+      "severity": "Critical",
+      "title": "MS17-010: Security Update for Microsoft Windows SMB Server (4013389)",
+      "service": "smb",
+      "requires_auth": false,
+      "patched": false,
+      "has_exploit": true,
+      "script_path": "exploits\\exploits_20251111_023313\\10_0_1_7\\CVE_2017_0144_unknown.ps1",
+      "script_language": "powershell",
+      "llm_generated": true,
+      "requires_review": true
+    },
+    {
+      "id": "CVE-2017-7269@10.0.1.7:80",
+      "type": "vulnerability",
+      "cve": "CVE-2017-7269",
+      "host": "10.0.1.7",
+      "port": 80,
+      "cvss": 7.5,
+      "severity": "Critical",
+      "title": "Microsoft IIS WebDAV ScStoragePathFromUrl Buffer Overflow (CVE-2017-7269)",
+      "service": "http",
+      "requires_auth": true,
+      "patched": false,
+      "has_exploit": true,
+      "script_path": "exploits\\exploits_20251111_023313\\10_0_1_7\\CVE_2017_7269_unknown.ps1",
+      "script_language": "powershell",
+      "llm_generated": true,
+      "requires_review": true
+    },
+    {
+      "id": "CVE-2021-3711@10.0.1.9:443",
+      "type": "vulnerability",
+      "cve": "CVE-2021-3711",
+      "host": "10.0.1.9",
+      "port": 443,
+      "cvss": 8.1,
+      "severity": "Critical",
+      "title": "OpenSSL SM2 Decryption Memory Corruption (CVE-2021-3711)",
+      "service": "https",
+      "requires_auth": false,
+      "patched": false,
+      "has_exploit": true,
+      "script_path": "exploits\\exploits_20251111_023313\\10_0_1_9\\CVE_2021_3711_unknown.py",
+      "script_language": "python",
+      "llm_generated": true,
+      "requires_review": true
+    },
+    {
+      "id": "CVE-2014-6271@10.0.1.11:80",
+      "type": "vulnerability",
+      "cve": "CVE-2014-6271",
+      "host": "10.0.1.11",
+      "port": 80,
+      "cvss": 9.8,
+      "severity": "Critical",
+      "title": "Shellshock (CVE-2014-6271)",
+      "service": "http",
+      "requires_auth": false,
+      "patched": false,
+      "has_exploit": true,
+      "script_path": "exploits\\exploits_20251111_023313\\10_0_1_11\\CVE_2014_6271_unknown.sh",
+      "script_language": "bash",
+      "llm_generated": true,
+      "requires_review": true
+    },
+    {
+      "id": "NO_CVE@10.0.1.13:445",
+      "type": "vulnerability",
+      "cve": "NO_CVE",
+      "host": "10.0.1.13",
+      "port": 445,
+      "cvss": 6.5,
+      "severity": "High",
+      "title": "SMBv1 Enabled (Microsoft Windows)",
+      "service": "smb",
+      "requires_auth": true,
+      "patched": false
+    },
+    {
+      "id": "initial_access@10.0.1.13",
+      "type": "capability",
+      "capability": "initial_access",
+      "host": "10.0.1.13",
+      "achieved": false
+    },
+    {
+      "id": "root_shell@10.0.1.13",
+      "type": "capability",
+      "capability": "root_shell",
+      "host": "10.0.1.13",
+      "achieved": false
+    },
+    {
+      "id": "user_shell@10.0.1.13",
+      "type": "capability",
+      "capability": "user_shell",
+      "host": "10.0.1.13",
+      "achieved": false
+    },
+    {
+      "id": "credentials@10.0.1.13",
+      "type": "capability",
+      "capability": "credentials",
+      "host": "10.0.1.13",
+      "achieved": false
+    },
+    {
+      "id": "lateral_movement@10.0.1.13",
+      "type": "capability",
+      "capability": "lateral_movement",
+      "host": "10.0.1.13",
+      "achieved": false
+    },
+    {
+      "id": "data_access@10.0.1.13",
+      "type": "capability",
+      "capability": "data_access",
+      "host": "10.0.1.13",
+      "achieved": false
+    },
+    {
+      "id": "privilege_escalation@10.0.1.13",
+      "type": "capability",
+      "capability": "privilege_escalation",
+      "host": "10.0.1.13",
+      "achieved": false
+    },
+    {
+      "id": "initial_access@10.0.1.11",
+      "type": "capability",
+      "capability": "initial_access",
+      "host": "10.0.1.11",
+      "achieved": false
+    },
+    {
+      "id": "root_shell@10.0.1.11",
+      "type": "capability",
+      "capability": "root_shell",
+      "host": "10.0.1.11",
+      "achieved": false
+    },
+    {
+      "id": "user_shell@10.0.1.11",
+      "type": "capability",
+      "capability": "user_shell",
+      "host": "10.0.1.11",
+      "achieved": false
+    },
+    {
+      "id": "credentials@10.0.1.11",
+      "type": "capability",
+      "capability": "credentials",
+      "host": "10.0.1.11",
+      "achieved": false
+    },
+    {
+      "id": "lateral_movement@10.0.1.11",
+      "type": "capability",
+      "capability": "lateral_movement",
+      "host": "10.0.1.11",
+      "achieved": false
+    },
+    {
+      "id": "data_access@10.0.1.11",
+      "type": "capability",
+      "capability": "data_access",
+      "host": "10.0.1.11",
+      "achieved": false
+    },
+    {
+      "id": "privilege_escalation@10.0.1.11",
+      "type": "capability",
+      "capability": "privilege_escalation",
+      "host": "10.0.1.11",
+      "achieved": false
+    },
+    {
+      "id": "initial_access@10.0.1.7",
+      "type": "capability",
+      "capability": "initial_access",
+      "host": "10.0.1.7",
+      "achieved": false
+    },
+    {
+      "id": "root_shell@10.0.1.7",
+      "type": "capability",
+      "capability": "root_shell",
+      "host": "10.0.1.7",
+      "achieved": false
+    },
+    {
+      "id": "user_shell@10.0.1.7",
+      "type": "capability",
+      "capability": "user_shell",
+      "host": "10.0.1.7",
+      "achieved": false
+    },
+    {
+      "id": "credentials@10.0.1.7",
+      "type": "capability",
+      "capability": "credentials",
+      "host": "10.0.1.7",
+      "achieved": false
+    },
+    {
+      "id": "lateral_movement@10.0.1.7",
+      "type": "capability",
+      "capability": "lateral_movement",
+      "host": "10.0.1.7",
+      "achieved": false
+    },
+    {
+      "id": "data_access@10.0.1.7",
+      "type": "capability",
+      "capability": "data_access",
+      "host": "10.0.1.7",
+      "achieved": false
+    },
+    {
+      "id": "privilege_escalation@10.0.1.7",
+      "type": "capability",
+      "capability": "privilege_escalation",
+      "host": "10.0.1.7",
+      "achieved": false
+    },
+    {
+      "id": "initial_access@10.0.1.9",
+      "type": "capability",
+      "capability": "initial_access",
+      "host": "10.0.1.9",
+      "achieved": false
+    },
+    {
+      "id": "root_shell@10.0.1.9",
+      "type": "capability",
+      "capability": "root_shell",
+      "host": "10.0.1.9",
+      "achieved": false
+    },
+    {
+      "id": "user_shell@10.0.1.9",
+      "type": "capability",
+      "capability": "user_shell",
+      "host": "10.0.1.9",
+      "achieved": false
+    },
+    {
+      "id": "credentials@10.0.1.9",
+      "type": "capability",
+      "capability": "credentials",
+      "host": "10.0.1.9",
+      "achieved": false
+    },
+    {
+      "id": "lateral_movement@10.0.1.9",
+      "type": "capability",
+      "capability": "lateral_movement",
+      "host": "10.0.1.9",
+      "achieved": false
+    },
+    {
+      "id": "data_access@10.0.1.9",
+      "type": "capability",
+      "capability": "data_access",
+      "host": "10.0.1.9",
+      "achieved": false
+    },
+    {
+      "id": "privilege_escalation@10.0.1.9",
+      "type": "capability",
+      "capability": "privilege_escalation",
+      "host": "10.0.1.9",
+      "achieved": false
+    },
+    {
+      "id": "initial_access@10.0.1.5",
+      "type": "capability",
+      "capability": "initial_access",
+      "host": "10.0.1.5",
+      "achieved": false
+    },
+    {
+      "id": "root_shell@10.0.1.5",
+      "type": "capability",
+      "capability": "root_shell",
+      "host": "10.0.1.5",
+      "achieved": false
+    },
+    {
+      "id": "user_shell@10.0.1.5",
+      "type": "capability",
+      "capability": "user_shell",
+      "host": "10.0.1.5",
+      "achieved": false
+    },
+    {
+      "id": "credentials@10.0.1.5",
+      "type": "capability",
+      "capability": "credentials",
+      "host": "10.0.1.5",
+      "achieved": false
+    },
+    {
+      "id": "lateral_movement@10.0.1.5",
+      "type": "capability",
+      "capability": "lateral_movement",
+      "host": "10.0.1.5",
+      "achieved": false
+    },
+    {
+      "id": "data_access@10.0.1.5",
+      "type": "capability",
+      "capability": "data_access",
+      "host": "10.0.1.5",
+      "achieved": false
+    },
+    {
+      "id": "privilege_escalation@10.0.1.5",
+      "type": "capability",
+      "capability": "privilege_escalation",
+      "host": "10.0.1.5",
+      "achieved": false
+    },
+    {
+      "id": "None@10.0.1.13:445"
+    }
+  ],
+  "edges": [
+    {
+      "source": "10.0.1.13",
+      "target": "NO_CVE@10.0.1.13:445",
+      "relation": "VULNERABLE_TO"
+    },
+    {
+      "source": "10.0.1.13",
+      "target": "10.0.1.11",
+      "relation": "CONNECTS_TO"
+    },
+    {
+      "source": "10.0.1.13",
+      "target": "10.0.1.7",
+      "relation": "CONNECTS_TO"
+    },
+    {
+      "source": "10.0.1.13",
+      "target": "10.0.1.9",
+      "relation": "CONNECTS_TO"
+    },
+    {
+      "source": "10.0.1.13",
+      "target": "10.0.1.5",
+      "relation": "CONNECTS_TO"
+    },
+    {
+      "source": "10.0.1.11",
+      "target": "CVE-2014-6271@10.0.1.11:80",
+      "relation": "VULNERABLE_TO"
+    },
+    {
+      "source": "10.0.1.11",
+      "target": "10.0.1.13",
+      "relation": "CONNECTS_TO"
+    },
+    {
+      "source": "10.0.1.11",
+      "target": "10.0.1.7",
+      "relation": "CONNECTS_TO"
+    },
+    {
+      "source": "10.0.1.11",
+      "target": "10.0.1.9",
+      "relation": "CONNECTS_TO"
+    },
+    {
+      "source": "10.0.1.11",
+      "target": "10.0.1.5",
+      "relation": "CONNECTS_TO"
+    },
+    {
+      "source": "10.0.1.7",
+      "target": "CVE-2017-0144@10.0.1.7:445",
+      "relation": "VULNERABLE_TO"
+    },
+    {
+      "source": "10.0.1.7",
+      "target": "CVE-2017-7269@10.0.1.7:80",
+      "relation": "VULNERABLE_TO"
+    },
+    {
+      "source": "10.0.1.7",
+      "target": "10.0.1.13",
+      "relation": "CONNECTS_TO"
+    },
+    {
+      "source": "10.0.1.7",
+      "target": "10.0.1.11",
+      "relation": "CONNECTS_TO"
+    },
+    {
+      "source": "10.0.1.7",
+      "target": "10.0.1.9",
+      "relation": "CONNECTS_TO"
+    },
+    {
+      "source": "10.0.1.7",
+      "target": "10.0.1.5",
+      "relation": "CONNECTS_TO"
+    },
+    {
+      "source": "10.0.1.9",
+      "target": "CVE-2021-3711@10.0.1.9:443",
+      "relation": "VULNERABLE_TO"
+    },
+    {
+      "source": "10.0.1.9",
+      "target": "10.0.1.13",
+      "relation": "CONNECTS_TO"
+    },
+    {
+      "source": "10.0.1.9",
+      "target": "10.0.1.11",
+      "relation": "CONNECTS_TO"
+    },
+    {
+      "source": "10.0.1.9",
+      "target": "10.0.1.7",
+      "relation": "CONNECTS_TO"
+    },
+    {
+      "source": "10.0.1.9",
+      "target": "10.0.1.5",
+      "relation": "CONNECTS_TO"
+    },
+    {
+      "source": "10.0.1.5",
+      "target": "CVE-2020-1938@10.0.1.5:8009",
+      "relation": "VULNERABLE_TO"
+    },
+    {
+      "source": "10.0.1.5",
+      "target": "CVE-2021-41773@10.0.1.5:80",
+      "relation": "VULNERABLE_TO"
+    },
+    {
+      "source": "10.0.1.5",
+      "target": "CVE-2021-3711@10.0.1.5:443",
+      "relation": "VULNERABLE_TO"
+    },
+    {
+      "source": "10.0.1.5",
+      "target": "10.0.1.13",
+      "relation": "CONNECTS_TO"
+    },
+    {
+      "source": "10.0.1.5",
+      "target": "10.0.1.11",
+      "relation": "CONNECTS_TO"
+    },
+    {
+      "source": "10.0.1.5",
+      "target": "10.0.1.7",
+      "relation": "CONNECTS_TO"
+    },
+    {
+      "source": "10.0.1.5",
+      "target": "10.0.1.9",
+      "relation": "CONNECTS_TO"
+    },
+    {
+      "source": "CVE-2020-1938@10.0.1.5:8009",
+      "target": "root_shell@10.0.1.5",
+      "relation": "GRANTS",
+      "probability": 0.85
+    },
+    {
+      "source": "CVE-2020-1938@10.0.1.5:8009",
+      "target": "lateral_movement@10.0.1.5",
+      "relation": "GRANTS",
+      "probability": 0.9
+    },
+    {
+      "source": "CVE-2021-41773@10.0.1.5:80",
+      "target": "data_access@10.0.1.5",
+      "relation": "GRANTS",
+      "probability": 0.85
+    },
+    {
+      "source": "CVE-2021-41773@10.0.1.5:80",
+      "target": "root_shell@10.0.1.5",
+      "relation": "ENABLES"
+    },
+    {
+      "source": "CVE-2021-3711@10.0.1.5:443",
+      "target": "credentials@10.0.1.5",
+      "relation": "GRANTS",
+      "probability": 0.85
+    },
+    {
+      "source": "CVE-2021-3711@10.0.1.5:443",
+      "target": "root_shell@10.0.1.5",
+      "relation": "ENABLES"
+    },
+    {
+      "source": "CVE-2017-0144@10.0.1.7:445",
+      "target": "root_shell@10.0.1.7",
+      "relation": "GRANTS",
+      "probability": 0.85
+    },
+    {
+      "source": "CVE-2017-0144@10.0.1.7:445",
+      "target": "lateral_movement@10.0.1.7",
+      "relation": "GRANTS",
+      "probability": 0.9
+    },
+    {
+      "source": "CVE-2017-7269@10.0.1.7:80",
+      "target": "user_shell@10.0.1.7",
+      "relation": "GRANTS",
+      "probability": 0.85
+    },
+    {
+      "source": "CVE-2017-7269@10.0.1.7:80",
+      "target": "root_shell@10.0.1.7",
+      "relation": "ENABLES"
+    },
+    {
+      "source": "CVE-2017-7269@10.0.1.7:80",
+      "target": "credentials@10.0.1.7",
+      "relation": "REQUIRES"
+    },
+    {
+      "source": "CVE-2021-3711@10.0.1.9:443",
+      "target": "credentials@10.0.1.9",
+      "relation": "GRANTS",
+      "probability": 0.85
+    },
+    {
+      "source": "CVE-2014-6271@10.0.1.11:80",
+      "target": "root_shell@10.0.1.11",
+      "relation": "GRANTS",
+      "probability": 0.85
+    },
+    {
+      "source": "CVE-2014-6271@10.0.1.11:80",
+      "target": "lateral_movement@10.0.1.11",
+      "relation": "GRANTS",
+      "probability": 0.9
+    },
+    {
+      "source": "None@10.0.1.13:445",
+      "target": "root_shell@10.0.1.13",
+      "relation": "GRANTS",
+      "probability": 0.85
+    },
+    {
+      "source": "None@10.0.1.13:445",
+      "target": "lateral_movement@10.0.1.13",
+      "relation": "GRANTS",
+      "probability": 0.9
+    }
+  ]
+}
