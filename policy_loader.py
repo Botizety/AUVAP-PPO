@@ -3,11 +3,19 @@
 policy_loader.py - YAML Policy Configuration Loader
 
 Loads policy rules from YAML configuration files for the AUVAP pipeline.
-Supports multiple operators: in, eq, contains, regex, gt, gte, lt, lte, ne
+
+Supported Operators:
+  Membership: in, not_in
+  Equality: eq, ne
+  String: contains, not_contains, starts_with, ends_with
+  Regex: regex, not_regex
+  Numeric: gt, gte, lt, lte, range
+  Existence: exists, not_exists
+  Emptiness: is_empty, not_empty
 
 Usage:
     from policy_loader import load_policies_from_yaml
-    
+
     rules = load_policies_from_yaml("policy_config.yaml")
     policy_engine.add_rules(rules)
 """
@@ -29,45 +37,78 @@ from policy_engine import PolicyRule
 def create_predicate(condition: Dict[str, Any]) -> Callable[[dict], bool]:
     """
     Create a predicate function from a condition specification.
-    
+
     Args:
         condition: Dictionary with 'field', 'operator', and 'value' keys
-        
+
     Returns:
         Callable that takes a finding dict and returns bool
-        
+
     Supported operators:
         - in: Field value is in list
+        - not_in: Field value is not in list (NEW)
         - eq: Field value equals value
         - ne: Field value not equals value
         - contains: Value is substring of field (case-insensitive)
+        - not_contains: Value is not substring of field (NEW)
+        - starts_with: Field starts with value (case-insensitive) (NEW)
+        - ends_with: Field ends with value (case-insensitive) (NEW)
         - regex: Field matches regular expression
+        - not_regex: Field does not match regex (NEW)
         - gt: Field value greater than value
         - gte: Field value greater than or equal to value
         - lt: Field value less than value
         - lte: Field value less than or equal to value
+        - range: Field value is within [min, max] range (NEW)
+        - exists: Field exists and is not None (NEW)
+        - not_exists: Field doesn't exist or is None (NEW)
+        - is_empty: Field is empty string/list (NEW)
+        - not_empty: Field has content (NEW)
     """
     field = condition['field']
     operator = condition['operator']
-    value = condition['value']
-    
+    value = condition.get('value')  # Some operators don't need value
+
+    # Membership operators
     if operator == 'in':
         # Check if field value is in the list
         return lambda f: f.get(field) in value
-    
+
+    elif operator == 'not_in':
+        # Check if field value is NOT in the list
+        return lambda f: f.get(field) not in value
+
+    # Equality operators
     elif operator == 'eq':
         # Check if field equals value
         return lambda f: f.get(field) == value
-    
+
     elif operator == 'ne':
         # Check if field not equals value
         return lambda f: f.get(field) != value
-    
+
+    # String matching operators
     elif operator == 'contains':
         # Check if value is substring of field (case-insensitive)
         value_lower = str(value).lower()
         return lambda f: value_lower in str(f.get(field, '')).lower()
-    
+
+    elif operator == 'not_contains':
+        # Check if value is NOT substring of field (case-insensitive)
+        value_lower = str(value).lower()
+        return lambda f: value_lower not in str(f.get(field, '')).lower()
+
+    elif operator == 'starts_with':
+        # Check if field starts with value (case-insensitive)
+        value_lower = str(value).lower()
+        return lambda f: str(f.get(field, '')).lower().startswith(value_lower)
+
+    elif operator == 'ends_with':
+        # Check if field ends with value (case-insensitive)
+        value_lower = str(value).lower()
+        return lambda f: str(f.get(field, '')).lower().endswith(value_lower)
+
+    # Regex operators
     elif operator == 'regex':
         # Check if field matches regex pattern
         try:
@@ -76,23 +117,77 @@ def create_predicate(condition: Dict[str, Any]) -> Callable[[dict], bool]:
         except re.error as e:
             print(f"[WARNING] Invalid regex pattern '{value}': {e}", file=sys.stderr)
             return lambda f: False
-    
+
+    elif operator == 'not_regex':
+        # Check if field does NOT match regex pattern
+        try:
+            pattern = re.compile(value)
+            return lambda f: not bool(pattern.search(str(f.get(field, ''))))
+        except re.error as e:
+            print(f"[WARNING] Invalid regex pattern '{value}': {e}", file=sys.stderr)
+            return lambda f: True  # If regex invalid, match everything
+
+    # Numeric comparison operators
     elif operator == 'gt':
         # Check if field value > value
         return lambda f: (f.get(field) or 0) > value
-    
+
     elif operator == 'gte':
         # Check if field value >= value
         return lambda f: (f.get(field) or 0) >= value
-    
+
     elif operator == 'lt':
         # Check if field value < value
         return lambda f: (f.get(field) or 0) < value
-    
+
     elif operator == 'lte':
         # Check if field value <= value
         return lambda f: (f.get(field) or 0) <= value
-    
+
+    elif operator == 'range':
+        # Check if field value is within [min, max] range (inclusive)
+        # Value must be a list/tuple: [min, max]
+        if not isinstance(value, (list, tuple)) or len(value) != 2:
+            raise ValueError(f"'range' operator requires value as [min, max], got {value}")
+        min_val, max_val = value
+        return lambda f: min_val <= (f.get(field) or 0) <= max_val
+
+    # Existence operators
+    elif operator == 'exists':
+        # Check if field exists and is not None
+        return lambda f: field in f and f[field] is not None
+
+    elif operator == 'not_exists':
+        # Check if field doesn't exist or is None
+        return lambda f: field not in f or f[field] is None
+
+    # Emptiness operators
+    elif operator == 'is_empty':
+        # Check if field is empty string or empty list
+        def is_empty_check(f):
+            val = f.get(field)
+            if val is None:
+                return True
+            if isinstance(val, str):
+                return val.strip() == ''
+            if isinstance(val, (list, tuple, dict)):
+                return len(val) == 0
+            return False
+        return is_empty_check
+
+    elif operator == 'not_empty':
+        # Check if field has content (not empty)
+        def not_empty_check(f):
+            val = f.get(field)
+            if val is None:
+                return False
+            if isinstance(val, str):
+                return val.strip() != ''
+            if isinstance(val, (list, tuple, dict)):
+                return len(val) > 0
+            return True
+        return not_empty_check
+
     else:
         raise ValueError(f"Unknown operator: {operator}")
 
@@ -127,9 +222,14 @@ def parse_policy_rule(rule_dict: Dict[str, Any]) -> PolicyRule:
         condition = rule_dict['condition']
         if not isinstance(condition, dict):
             raise ValueError("Condition must be a dictionary")
-        
-        if 'field' not in condition or 'operator' not in condition or 'value' not in condition:
-            raise ValueError("Condition must have 'field', 'operator', and 'value' keys")
+
+        if 'field' not in condition or 'operator' not in condition:
+            raise ValueError("Condition must have 'field' and 'operator' keys")
+
+        # Some operators don't require 'value' (exists, not_exists, is_empty, not_empty)
+        value_optional_operators = ['exists', 'not_exists', 'is_empty', 'not_empty']
+        if condition['operator'] not in value_optional_operators and 'value' not in condition:
+            raise ValueError(f"Operator '{condition['operator']}' requires a 'value' key")
         
         # Build predicate function
         predicate = create_predicate(condition)

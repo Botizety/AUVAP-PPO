@@ -336,54 +336,265 @@ def parse_csv(csv_path: str) -> list[VAFinding]:
     return findings
 
 
-def parse_report(file_path: str, deduplicate: bool = True) -> list[VAFinding]:
+def validate_finding(finding: VAFinding) -> Tuple[bool, List[str]]:
+    """
+    Validate a VAFinding against expected schema and constraints.
+
+    Validation checks:
+    - Required fields are non-empty
+    - Data types are correct
+    - Values are within valid ranges
+    - Format constraints (e.g., IP addresses, CVE format)
+
+    Args:
+        finding: VAFinding object to validate
+
+    Returns:
+        Tuple of (is_valid, list_of_errors)
+    """
+    errors = []
+
+    # Required string fields must not be empty
+    required_str_fields = ['host_ip', 'title', 'severity_text']
+    for field in required_str_fields:
+        value = getattr(finding, field, None)
+        if not value or not isinstance(value, str) or not value.strip():
+            errors.append(f"Required field '{field}' is missing or empty")
+
+    # Port must be valid range
+    if finding.port is not None:
+        if not isinstance(finding.port, int):
+            errors.append(f"Port must be integer, got {type(finding.port)}")
+        elif not (0 <= finding.port <= 65535):
+            errors.append(f"Port {finding.port} out of valid range (0-65535)")
+
+    # Protocol must be valid
+    if finding.protocol:
+        valid_protocols = ['tcp', 'udp', 'icmp', 'sctp', 'unknown']
+        if finding.protocol.lower() not in valid_protocols:
+            errors.append(f"Invalid protocol '{finding.protocol}', expected one of {valid_protocols}")
+
+    # Severity must be valid
+    if finding.severity_text:
+        valid_severities = ['Critical', 'High', 'Medium', 'Low', 'None', 'Info']
+        if finding.severity_text not in valid_severities:
+            errors.append(f"Invalid severity '{finding.severity_text}', expected one of {valid_severities}")
+
+    # CVSS score must be in valid range
+    if finding.cvss is not None:
+        if not isinstance(finding.cvss, (int, float)):
+            errors.append(f"CVSS must be numeric, got {type(finding.cvss)}")
+        elif not (0.0 <= finding.cvss <= 10.0):
+            errors.append(f"CVSS score {finding.cvss} out of valid range (0.0-10.0)")
+
+    # CVE format validation (if present)
+    if finding.cve and finding.cve.strip():
+        import re
+        # CVE format: CVE-YYYY-NNNN+ (where YYYY is year, NNNN+ is 4+ digits)
+        cve_pattern = r'CVE-\d{4}-\d{4,}'
+        if not re.match(cve_pattern, finding.cve):
+            # Could be multiple CVEs separated by commas
+            cves = [c.strip() for c in finding.cve.split(',')]
+            invalid_cves = [c for c in cves if not re.match(cve_pattern, c)]
+            if invalid_cves:
+                errors.append(f"Invalid CVE format: {', '.join(invalid_cves)}")
+
+    # IP address format validation (basic check)
+    if finding.host_ip:
+        import re
+        # Simple IPv4 pattern (basic validation)
+        ipv4_pattern = r'^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$'
+        if not re.match(ipv4_pattern, finding.host_ip):
+            # Could be IPv6 or hostname - just warn, don't fail
+            pass  # Allow hostnames and IPv6
+
+    return (len(errors) == 0, errors)
+
+
+def validate_findings_batch(findings: List[VAFinding], fail_on_invalid: bool = False) -> Tuple[List[VAFinding], Dict]:
+    """
+    Validate a batch of findings and return validation report.
+
+    Args:
+        findings: List of VAFinding objects
+        fail_on_invalid: If True, raise exception on validation errors
+
+    Returns:
+        Tuple of (valid_findings, validation_report)
+
+    Raises:
+        ValueError: If fail_on_invalid=True and validation errors found
+    """
+    valid_findings = []
+    invalid_findings = []
+    validation_errors = {}
+
+    for i, finding in enumerate(findings):
+        is_valid, errors = validate_finding(finding)
+
+        if is_valid:
+            valid_findings.append(finding)
+        else:
+            invalid_findings.append(finding)
+            validation_errors[i] = {
+                'finding_id': finding.finding_id,
+                'host_ip': finding.host_ip,
+                'title': finding.title[:50] if finding.title else 'N/A',
+                'errors': errors
+            }
+
+    report = {
+        'total_findings': len(findings),
+        'valid_findings': len(valid_findings),
+        'invalid_findings': len(invalid_findings),
+        'validation_errors': validation_errors
+    }
+
+    if fail_on_invalid and invalid_findings:
+        error_msg = f"Validation failed: {len(invalid_findings)} invalid findings found\n"
+        for idx, err_data in list(validation_errors.items())[:5]:  # Show first 5
+            error_msg += f"  Finding {idx}: {err_data['title']} - {err_data['errors']}\n"
+        raise ValueError(error_msg)
+
+    return valid_findings, report
+
+
+def detect_format(file_path: str) -> str:
+    """
+    Detect file format by inspecting content (not just extension).
+
+    Detection logic:
+    1. Check for XML declaration or root elements (Nessus XML)
+    2. Check for CSV header patterns
+    3. Fallback to extension if content is ambiguous
+
+    Args:
+        file_path: Path to report file
+
+    Returns:
+        Format string: 'xml', 'csv', or 'unknown'
+    """
+    path = Path(file_path)
+
+    try:
+        # Read first 2KB for format detection
+        with open(file_path, 'rb') as f:
+            header = f.read(2048)
+
+        # Try to decode as UTF-8
+        try:
+            header_text = header.decode('utf-8', errors='ignore').strip()
+        except:
+            header_text = str(header, errors='ignore').strip()
+
+        # Check for XML (Nessus format)
+        if any(marker in header_text for marker in [
+            '<?xml', '<NessusClientData', '<ReportHost', '<Report '
+        ]):
+            return 'xml'
+
+        # Check for CSV format (look for common Nessus CSV headers)
+        header_lower = header_text.lower()
+        if any(marker in header_lower for marker in [
+            'plugin id,cve,cvss',
+            'host,port,protocol',
+            'risk,host,protocol',
+            'name,host,port'
+        ]):
+            # Additional check: does it have comma-separated values?
+            first_line = header_text.split('\n')[0] if '\n' in header_text else header_text
+            if ',' in first_line:
+                return 'csv'
+
+        # Fallback to extension-based detection
+        suffix = path.suffix.lower()
+        if suffix in ['.xml', '.nessus']:
+            return 'xml'
+        elif suffix == '.csv':
+            return 'csv'
+
+        return 'unknown'
+
+    except Exception as e:
+        # On error, fallback to extension
+        suffix = path.suffix.lower()
+        if suffix in ['.xml', '.nessus']:
+            return 'xml'
+        elif suffix == '.csv':
+            return 'csv'
+        return 'unknown'
+
+
+def parse_report(file_path: str, deduplicate: bool = True, validate: bool = True) -> list[VAFinding]:
     """
     Auto-detect file format and parse vulnerability report.
-    
+
     Supports:
     - Nessus XML (.nessus, .xml)
     - CSV (.csv)
-    
+
+    Format detection uses content inspection (not just file extension).
+
     Args:
         file_path: Path to report file
         deduplicate: Whether to deduplicate findings by finding_id (default: True)
-        
+        validate: Whether to validate findings against schema (default: True)
+
     Returns:
-        List of VAFinding objects (deduplicated if requested)
-        
+        List of VAFinding objects (deduplicated and validated if requested)
+
     Raises:
         ValueError: If file format is unsupported
     """
-    path = Path(file_path)
-    suffix = path.suffix.lower()
-    
-    # Parse based on format
-    if suffix in ['.xml', '.nessus']:
+    # Detect format by content
+    detected_format = detect_format(file_path)
+
+    # Parse based on detected format
+    if detected_format == 'xml':
         raw_findings = parse_nessus_xml(file_path)
-    elif suffix == '.csv':
+    elif detected_format == 'csv':
         raw_findings = parse_csv(file_path)
     else:
-        raise ValueError(f"Unsupported file format: {suffix}. Use .xml, .nessus, or .csv")
-    
+        path = Path(file_path)
+        raise ValueError(
+            f"Unsupported or unrecognized file format: {path.suffix}. "
+            f"Expected Nessus XML (.xml, .nessus) or CSV (.csv)"
+        )
+
     raw_count = len(raw_findings)
-    
+
     # Apply deduplication if requested
     if deduplicate:
         findings = deduplicate_findings(raw_findings)
     else:
         findings = raw_findings
-    
-    # Calculate and emit metrics
+
+    # Apply schema validation if requested
+    if validate:
+        findings, validation_report = validate_findings_batch(findings, fail_on_invalid=False)
+
+        # Emit validation metrics
+        if validation_report['invalid_findings'] > 0:
+            print(f"[VALIDATION] Schema Validation:", file=sys.stderr)
+            print(f"  Valid findings: {validation_report['valid_findings']}", file=sys.stderr)
+            print(f"  Invalid findings: {validation_report['invalid_findings']}", file=sys.stderr)
+            print(f"  Validation rate: {validation_report['valid_findings']/validation_report['total_findings']*100:.1f}%", file=sys.stderr)
+
+            # Show sample errors (first 3)
+            for idx, err_data in list(validation_report['validation_errors'].items())[:3]:
+                print(f"  ⚠ Finding {idx} ({err_data['host_ip']}): {err_data['errors'][0]}", file=sys.stderr)
+
+    # Calculate and emit normalization metrics
     imputed_count = sum(1 for f in findings if f.data_quality.imputed_fields)
     metrics = calculate_normalization_metrics(raw_count, len(findings), imputed_count)
-    
+
     print(f"[METRICS] Phase 1 Normalization:", file=sys.stderr)
     print(f"  Raw findings: {metrics['raw_findings']}", file=sys.stderr)
     print(f"  Normalized findings: {metrics['normalized_findings']}", file=sys.stderr)
     print(f"  Deduplication removed: {metrics['deduplication_count']}", file=sys.stderr)
     print(f"  Normalization efficiency (η): {metrics['normalization_efficiency']:.3f}", file=sys.stderr)
     print(f"  Imputation rate (λ): {metrics['imputation_rate']:.3f}", file=sys.stderr)
-    
+
     return findings
 
 
