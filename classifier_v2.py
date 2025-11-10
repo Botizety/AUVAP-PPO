@@ -300,182 +300,183 @@ def _heuristic_fallback(finding: dict) -> dict:
     }
 
 
+def _perform_classification(finding: dict, provider: str, api_key: str,
+                           model: Optional[str], business_context: Optional[dict],
+                           few_shot_examples: Optional[str]) -> dict:
+    """
+    Helper function to perform the actual classification call.
+
+    Extracted to avoid code duplication in retry logic.
+    """
+    if provider == "github":
+        model = model or "gpt-4o-mini"
+        return _classify_with_openai_sdk(
+            finding, api_key,
+            base_url="https://models.inference.ai.azure.com",
+            model=model,
+            business_context=business_context,
+            few_shot_examples=few_shot_examples
+        )
+    elif provider == "gemini":
+        return _classify_with_gemini(finding, api_key, business_context, few_shot_examples)
+    elif provider == "openai":
+        model = model or "gpt-5-nano"
+        return _classify_with_openai_sdk(
+            finding, api_key,
+            model=model,
+            business_context=business_context,
+            few_shot_examples=few_shot_examples
+        )
+    elif provider == "local":
+        model = model or "deepseek-r1:14b"
+        base_url = os.environ.get('LOCAL_OPENAI_BASE_URL') or "http://localhost:11434/v1"
+        return _classify_with_openai_sdk(
+            finding, api_key,
+            base_url=base_url,
+            model=model,
+            business_context=business_context,
+            few_shot_examples=few_shot_examples
+        )
+    else:
+        raise ValueError(f"Unknown provider: {provider}")
+
+
+def _is_transient_error(error_msg: str) -> bool:
+    """Check if error is transient and should be retried."""
+    return any(x in error_msg for x in [
+        "503", "UNAVAILABLE", "overloaded",
+        "500", "502", "504",
+        "timeout", "Timeout",
+        "Empty response from LLM - will retry",
+        "Connection", "connection",
+        "No complete JSON object found",
+        "Invalid JSON in response",
+        "Unterminated string"
+    ])
+
+
+def _is_rate_limit_error(error_msg: str) -> bool:
+    """Check if error is a rate limit error."""
+    return "RateLimitReached" in error_msg or "429" in error_msg
+
+
 def classify_single(finding: dict, provider: str = "auto",
                     api_key: Optional[str] = None,
                     model: Optional[str] = None,
                     business_context: Optional[dict] = None,
-                    few_shot_examples: Optional[str] = None) -> dict:
+                    few_shot_examples: Optional[str] = None,
+                    max_retries: int = 3,
+                    backoff_base: float = 2.0) -> dict:
     """
-    Classify a single finding using specified provider.
-    
+    Classify a single finding using specified provider with automatic retry.
+
     Args:
         finding: Dictionary from parser.to_dict_list()
-        provider: "gemini", "github", "openai", or "auto"
+        provider: "gemini", "github", "openai", "local", or "auto"
         api_key: API key (if None, reads from environment)
         model: Model name (provider-specific)
         business_context: Optional business rules and environment context
         few_shot_examples: Optional formatted few-shot examples (Phase 3)
-        
+        max_retries: Maximum number of retry attempts for transient errors (default: 3)
+        backoff_base: Base for exponential backoff calculation (default: 2.0)
+
     Returns:
         Finding dict enriched with classification fields
-    """
-    try:
-        # Auto-detect provider
-        if provider == "auto":
-            if os.environ.get('GITHUB_TOKEN'):
-                provider = "github"
-            elif os.environ.get('GEMINI_API_KEY') or os.environ.get('GOOGLE_API_KEY'):
-                provider = "gemini"
-            elif os.environ.get('OPENAI_API_KEY'):
-                provider = "openai"
-            elif os.environ.get('LOCAL_OPENAI_BASE_URL'):
-                provider = "local"
-            else:
-                raise RuntimeError("No API key found in environment")
-        
-        # Get API key
-        if api_key is None:
-            if provider == "github":
-                api_key = os.environ.get('GITHUB_TOKEN')
-                if not api_key:
-                    raise RuntimeError("GITHUB_TOKEN not set")
-            elif provider == "gemini":
-                api_key = os.environ.get('GEMINI_API_KEY') or os.environ.get('GOOGLE_API_KEY')
-                if not api_key:
-                    raise RuntimeError("GEMINI_API_KEY not set")
-            elif provider == "openai":
-                api_key = os.environ.get('OPENAI_API_KEY')
-                if not api_key:
-                    raise RuntimeError("OPENAI_API_KEY not set")
-            elif provider == "local":
-                api_key = os.environ.get('LOCAL_OPENAI_API_KEY') or "local"
-        
-        # Classify based on provider
-        if provider == "github":
-            model = model or "gpt-4o-mini"
-            assert api_key is not None
-            classification = _classify_with_openai_sdk(
-                finding, api_key,
-                base_url="https://models.inference.ai.azure.com",
-                model=model,
-                business_context=business_context,
-                few_shot_examples=few_shot_examples
-            )
-        elif provider == "gemini":
-            assert api_key is not None
-            classification = _classify_with_gemini(finding, api_key, business_context, few_shot_examples)
-        elif provider == "openai":
-            model = model or "gpt-5-nano"
-            assert api_key is not None
-            classification = _classify_with_openai_sdk(finding, api_key, model=model, business_context=business_context, few_shot_examples=few_shot_examples)
-        elif provider == "local":
-            model = model or "deepseek-r1:14b"
-            base_url = os.environ.get('LOCAL_OPENAI_BASE_URL') or "http://localhost:11434/v1"
-            assert api_key is not None
-            classification = _classify_with_openai_sdk(
-                finding,
-                api_key,
-                base_url=base_url,
-                model=model,
-                business_context=business_context,
-                few_shot_examples=few_shot_examples
-            )
-        else:
-            raise ValueError(f"Unknown provider: {provider}")
-        
-        # Merge classification into finding
-        enriched = finding.copy()
-        enriched.update(classification)
-        return enriched
-        
-    except Exception as e:
-        error_msg = str(e)
-        
-        # Check for transient errors that should be retried
-        is_transient = any(x in error_msg for x in [
-            "503", "UNAVAILABLE", "overloaded", 
-            "500", "502", "504",
-            "timeout", "Timeout",
-            "Empty response from LLM - will retry",
-            "Connection", "connection",
-            "No complete JSON object found",
-            "Invalid JSON in response",
-            "Unterminated string"
-        ])
-        
-        if is_transient:
-            # Retry with exponential backoff for transient errors
-            print(f"      ⚠️  Transient error, retrying with backoff...", file=sys.stderr)
-            max_retries = 3
-            for retry in range(max_retries):
-                wait_time = 2 ** retry  # 1s, 2s, 4s
-                print(f"      Retry {retry + 1}/{max_retries} in {wait_time}s...", file=sys.stderr)
-                time.sleep(wait_time)
-                
-                try:
-                    # Retry the classification
-                    if provider == "github":
-                        assert api_key is not None
-                        classification = _classify_with_openai_sdk(
-                            finding, api_key,
-                            base_url="https://models.inference.ai.azure.com",
-                            model=model or "gpt-4o-mini",
-                            business_context=business_context,
-                            few_shot_examples=few_shot_examples
-                        )
-                    elif provider == "gemini":
-                        assert api_key is not None
-                        classification = _classify_with_gemini(finding, api_key, business_context, few_shot_examples)
-                    elif provider == "openai":
-                        assert api_key is not None
-                        classification = _classify_with_openai_sdk(
-                            finding, api_key, 
-                            model=model or "gpt-4o-mini",
-                            business_context=business_context,
-                            few_shot_examples=few_shot_examples
-                        )
-                    elif provider == "local":
-                        assert api_key is not None
-                        base_url = os.environ.get('LOCAL_OPENAI_BASE_URL') or "http://localhost:11434/v1"
-                        classification = _classify_with_openai_sdk(
-                            finding,
-                            api_key,
-                            base_url=base_url,
-                            model=model or "deepseek-r1:14b",
-                            business_context=business_context,
-                            few_shot_examples=few_shot_examples
-                        )
-                    
-                    # Success! Return enriched finding
-                    enriched = finding.copy()
-                    enriched.update(classification)
-                    print(f"      ✅ Retry successful", file=sys.stderr)
-                    return enriched
-                    
-                except Exception as retry_error:
-                    if retry == max_retries - 1:
-                        # Last retry failed - stop execution
-                        print(f"\n[ERROR] All retries exhausted: {str(retry_error)}", file=sys.stderr)
-                        print(f"[!] Cannot continue without LLM classification.", file=sys.stderr)
-                        sys.exit(1)
-                    else:
-                        print(f"      Retry failed: {str(retry_error)[:100]}", file=sys.stderr)
-                        continue
-        
-        # Check if rate limited - stop execution
-        elif "RateLimitReached" in error_msg or "429" in error_msg:
-            print(f"\n[ERROR] Rate limit exceeded!", file=sys.stderr)
-            print(f"[ERROR] {error_msg[:200]}", file=sys.stderr)
-            print(f"\n[!] Cannot continue without LLM classification.", file=sys.stderr)
-            print(f"[!] Please wait for rate limit to reset or switch to a different provider.", file=sys.stderr)
-            sys.exit(1)
-        else:
-            # For other errors, show error and stop
-            print(f"\n[ERROR] LLM classification failed: {error_msg}", file=sys.stderr)
-            print(f"[!] Cannot continue without LLM classification.", file=sys.stderr)
-            sys.exit(1)
 
-        raise RuntimeError("LLM classification failed")
+    Raises:
+        RuntimeError: If classification fails after all retries
+        ValueError: If provider is unknown or API key is missing
+    """
+    # Auto-detect provider
+    if provider == "auto":
+        if os.environ.get('GITHUB_TOKEN'):
+            provider = "github"
+        elif os.environ.get('GEMINI_API_KEY') or os.environ.get('GOOGLE_API_KEY'):
+            provider = "gemini"
+        elif os.environ.get('OPENAI_API_KEY'):
+            provider = "openai"
+        elif os.environ.get('LOCAL_OPENAI_BASE_URL'):
+            provider = "local"
+        else:
+            raise RuntimeError("No API key found in environment. Set GITHUB_TOKEN, GEMINI_API_KEY, OPENAI_API_KEY, or LOCAL_OPENAI_BASE_URL")
+
+    # Get API key
+    if api_key is None:
+        if provider == "github":
+            api_key = os.environ.get('GITHUB_TOKEN')
+            if not api_key:
+                raise RuntimeError("GITHUB_TOKEN not set")
+        elif provider == "gemini":
+            api_key = os.environ.get('GEMINI_API_KEY') or os.environ.get('GOOGLE_API_KEY')
+            if not api_key:
+                raise RuntimeError("GEMINI_API_KEY or GOOGLE_API_KEY not set")
+        elif provider == "openai":
+            api_key = os.environ.get('OPENAI_API_KEY')
+            if not api_key:
+                raise RuntimeError("OPENAI_API_KEY not set")
+        elif provider == "local":
+            api_key = os.environ.get('LOCAL_OPENAI_API_KEY') or "local"
+
+    # Attempt classification with retry logic
+    last_error = None
+
+    for attempt in range(max_retries + 1):  # +1 for initial attempt
+        try:
+            # Perform classification
+            classification = _perform_classification(
+                finding, provider, api_key, model,
+                business_context, few_shot_examples
+            )
+
+            # Success! Merge and return
+            enriched = finding.copy()
+            enriched.update(classification)
+
+            if attempt > 0:
+                print(f"      ✅ Retry {attempt} successful", file=sys.stderr)
+
+            return enriched
+
+        except Exception as e:
+            last_error = e
+            error_msg = str(e)
+
+            # Check error type
+            is_transient = _is_transient_error(error_msg)
+            is_rate_limit = _is_rate_limit_error(error_msg)
+
+            # Handle rate limit errors (don't retry)
+            if is_rate_limit:
+                print(f"\n[ERROR] Rate limit exceeded!", file=sys.stderr)
+                print(f"[ERROR] {error_msg[:200]}", file=sys.stderr)
+                print(f"\n[!] Cannot continue without LLM classification.", file=sys.stderr)
+                print(f"[!] Please wait for rate limit to reset or switch to a different provider.", file=sys.stderr)
+                raise RuntimeError(f"Rate limit exceeded: {error_msg}") from e
+
+            # Handle transient errors (retry with backoff)
+            if is_transient and attempt < max_retries:
+                wait_time = backoff_base ** attempt  # 1s, 2s, 4s for base=2.0
+
+                if attempt == 0:
+                    print(f"      ⚠️  Transient error, retrying with exponential backoff...", file=sys.stderr)
+
+                print(f"      Retry {attempt + 1}/{max_retries} in {wait_time:.1f}s... (error: {error_msg[:80]})", file=sys.stderr)
+                time.sleep(wait_time)
+                continue
+
+            # Non-transient error or exhausted retries
+            if is_transient and attempt == max_retries:
+                print(f"\n[ERROR] All {max_retries} retries exhausted: {error_msg}", file=sys.stderr)
+                print(f"[!] Cannot continue without LLM classification.", file=sys.stderr)
+                raise RuntimeError(f"Classification failed after {max_retries} retries: {error_msg}") from e
+            else:
+                # Non-transient error on first attempt
+                print(f"\n[ERROR] LLM classification failed: {error_msg}", file=sys.stderr)
+                print(f"[!] Cannot continue without LLM classification.", file=sys.stderr)
+                raise RuntimeError(f"Classification failed: {error_msg}") from e
+
+    # Should never reach here, but just in case
+    raise RuntimeError(f"Classification failed: {last_error}") from last_error
 
 
 def classify_findings(findings: list[dict], provider: str = "auto",
