@@ -397,7 +397,7 @@ def main() -> None:
     if business_context.get('custom_notes'):
         print(f"      Custom guidance: {business_context['custom_notes'][:80]}...")
     print()
-    
+
     # Provider selection
     print("Select LLM Provider:")
     print("  1. Auto-detect (default)")
@@ -406,9 +406,9 @@ def main() -> None:
     print("  4. GitHub Models")
     print("  5. Local (Ollama/LM Studio)")
     print()
-    
+
     provider_choice = input("Choose provider (1-5) [1]: ").strip()
-    
+
     provider_map = {
         '1': 'auto',
         '2': 'openai',
@@ -417,9 +417,9 @@ def main() -> None:
         '5': 'local',
         '': 'auto'  # Default
     }
-    
+
     PROVIDER = provider_map.get(provider_choice, 'auto')
-    
+
     provider_names = {
         'auto': 'Auto-detect',
         'openai': 'OpenAI',
@@ -427,7 +427,7 @@ def main() -> None:
         'github': 'GitHub Models',
         'local': 'Local (Ollama/LM Studio)'
     }
-    
+
     model_choice = None
     if PROVIDER == 'local':
         model_choice = _prompt_local_model()
@@ -436,14 +436,57 @@ def main() -> None:
     if model_choice:
         print(f"      Local model: {model_choice}")
     print()
-    
+
+    # Initialize Phase 3 enhancements (calibrator and metrics tracking)
+    try:
+        from phase3_enhancements import ClassificationMetrics, ClassifierCalibrator
+
+        # Initialize metrics tracker
+        metrics = ClassificationMetrics()
+
+        # Initialize calibrator (loads existing state if available)
+        calibrator = ClassifierCalibrator(
+            base_threshold=0.5,
+            learning_rate=0.1,
+            target_fpr=0.05,
+            save_path=Path("calibration_state.json")
+        )
+
+        # Show calibrator status
+        if Path("calibration_state.json").exists():
+            print(f"      📊 Calibrator loaded (adjusted threshold: {calibrator.adjusted_threshold:.3f})")
+        else:
+            print(f"      📊 Calibrator initialized (base threshold: {calibrator.base_threshold:.3f})")
+        print()
+
+    except ImportError as e:
+        print(f"      [WARNING] Phase 3 enhancements not available: {e}", file=sys.stderr)
+        print("      Continuing without calibrator...", file=sys.stderr)
+        metrics = None
+        calibrator = None
+        print()
+
+    # Classify findings with metrics tracking
     classified = classifier.classify_findings(
-        findings_dicts, 
+        findings_dicts,
         provider=PROVIDER,
         model=model_choice,
-        business_context=business_context
+        business_context=business_context,
+        metrics=metrics  # Pass metrics tracker if available
     )
-    print(f"      Classified {len(classified)} findings\n")
+    print(f"      Classified {len(classified)} findings")
+
+    # Print classification metrics summary (Phase 3)
+    if metrics:
+        metrics.print_summary()
+
+        # Save metrics to file
+        metrics_file = results_dir / f"classification_metrics_{timestamp}.json"
+        with open(metrics_file, 'w') as f:
+            json.dump(metrics.get_summary(), f, indent=2)
+        print(f"      Metrics saved to: {metrics_file}")
+
+    print()
     
     # Step 4: Apply feasibility filter
     print("[4/6] Applying feasibility filter")

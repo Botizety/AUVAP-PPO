@@ -482,30 +482,34 @@ def classify_single(finding: dict, provider: str = "auto",
 def classify_findings(findings: list[dict], provider: str = "auto",
                      model: Optional[str] = None,
                      business_context: Optional[dict] = None,
-                     enable_few_shot: bool = True) -> list[dict]:
+                     enable_few_shot: bool = True,
+                     metrics: Optional[Any] = None) -> list[dict]:
     """
     Classify a batch of findings with rate limiting, metrics, and few-shot examples.
-    
+
     Args:
         findings: List of dictionaries from parser.to_dict_list()
         provider: "gemini", "github", "openai", or "auto"
         model: Model name (provider-specific)
         business_context: Optional business rules and environment context
         enable_few_shot: Enable dynamic few-shot example selection (Phase 3)
-        
+        metrics: Optional ClassificationMetrics instance for tracking performance
+
     Returns:
         List of enriched finding dictionaries
     """
     # Initialize Phase 3 components
     from pathlib import Path
-    
+
     few_shot_selector = None
-    metrics = None
-    
+
+    # Use provided metrics or create new one
     try:
         from phase3_enhancements import DynamicFewShotSelector, ClassificationMetrics
-        metrics = ClassificationMetrics()
-        
+
+        if metrics is None:
+            metrics = ClassificationMetrics()
+
         if enable_few_shot and Path("examples.json").exists():
             try:
                 few_shot_selector = DynamicFewShotSelector()
@@ -607,11 +611,13 @@ def classify_findings(findings: list[dict], provider: str = "auto",
                 time.sleep(0.5)  # 0.5s for GitHub/OpenAI
     
     print(f"[+] Classified {len(enriched)} findings", file=sys.stderr)
-    
-    # Phase 3: Print metrics summary
-    if metrics:
-        metrics.print_summary()
-    
+
+    # Phase 3: Print metrics summary (only if metrics was created internally)
+    # If metrics was passed from caller, let caller handle printing
+    if metrics and 'metrics_printed' not in dir(metrics):
+        metrics.metrics_printed = True  # Mark to avoid duplicate printing
+        # Metrics summary will be printed by caller (experiment.py)
+
     return enriched
 
 
