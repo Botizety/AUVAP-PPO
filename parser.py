@@ -336,34 +336,106 @@ def parse_csv(csv_path: str) -> list[VAFinding]:
     return findings
 
 
+def detect_format(file_path: str) -> str:
+    """
+    Detect file format by inspecting content (not just extension).
+
+    Detection logic:
+    1. Check for XML declaration or root elements (Nessus XML)
+    2. Check for CSV header patterns
+    3. Fallback to extension if content is ambiguous
+
+    Args:
+        file_path: Path to report file
+
+    Returns:
+        Format string: 'xml', 'csv', or 'unknown'
+    """
+    path = Path(file_path)
+
+    try:
+        # Read first 2KB for format detection
+        with open(file_path, 'rb') as f:
+            header = f.read(2048)
+
+        # Try to decode as UTF-8
+        try:
+            header_text = header.decode('utf-8', errors='ignore').strip()
+        except:
+            header_text = str(header, errors='ignore').strip()
+
+        # Check for XML (Nessus format)
+        if any(marker in header_text for marker in [
+            '<?xml', '<NessusClientData', '<ReportHost', '<Report '
+        ]):
+            return 'xml'
+
+        # Check for CSV format (look for common Nessus CSV headers)
+        header_lower = header_text.lower()
+        if any(marker in header_lower for marker in [
+            'plugin id,cve,cvss',
+            'host,port,protocol',
+            'risk,host,protocol',
+            'name,host,port'
+        ]):
+            # Additional check: does it have comma-separated values?
+            first_line = header_text.split('\n')[0] if '\n' in header_text else header_text
+            if ',' in first_line:
+                return 'csv'
+
+        # Fallback to extension-based detection
+        suffix = path.suffix.lower()
+        if suffix in ['.xml', '.nessus']:
+            return 'xml'
+        elif suffix == '.csv':
+            return 'csv'
+
+        return 'unknown'
+
+    except Exception as e:
+        # On error, fallback to extension
+        suffix = path.suffix.lower()
+        if suffix in ['.xml', '.nessus']:
+            return 'xml'
+        elif suffix == '.csv':
+            return 'csv'
+        return 'unknown'
+
+
 def parse_report(file_path: str, deduplicate: bool = True) -> list[VAFinding]:
     """
     Auto-detect file format and parse vulnerability report.
-    
+
     Supports:
     - Nessus XML (.nessus, .xml)
     - CSV (.csv)
-    
+
+    Format detection uses content inspection (not just file extension).
+
     Args:
         file_path: Path to report file
         deduplicate: Whether to deduplicate findings by finding_id (default: True)
-        
+
     Returns:
         List of VAFinding objects (deduplicated if requested)
-        
+
     Raises:
         ValueError: If file format is unsupported
     """
-    path = Path(file_path)
-    suffix = path.suffix.lower()
-    
-    # Parse based on format
-    if suffix in ['.xml', '.nessus']:
+    # Detect format by content
+    detected_format = detect_format(file_path)
+
+    # Parse based on detected format
+    if detected_format == 'xml':
         raw_findings = parse_nessus_xml(file_path)
-    elif suffix == '.csv':
+    elif detected_format == 'csv':
         raw_findings = parse_csv(file_path)
     else:
-        raise ValueError(f"Unsupported file format: {suffix}. Use .xml, .nessus, or .csv")
+        path = Path(file_path)
+        raise ValueError(
+            f"Unsupported or unrecognized file format: {path.suffix}. "
+            f"Expected Nessus XML (.xml, .nessus) or CSV (.csv)"
+        )
     
     raw_count = len(raw_findings)
     
