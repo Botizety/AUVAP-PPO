@@ -327,7 +327,7 @@ def main() -> None:
         print()
     
     # Step 1: Parse Nessus XML
-    print(f"[1/4] Parsing vulnerability report: {input_file}")
+    print(f"[1/6] Parsing vulnerability report: {input_file}")
     try:
         findings = parser.parse_report(input_file)  # Auto-detects XML or CSV
         findings_dicts = parser.to_dict_list(findings)
@@ -335,13 +335,49 @@ def main() -> None:
     except Exception as e:
         print(f"[ERROR] Failed to parse XML: {e}", file=sys.stderr)
         sys.exit(1)
-    
+
     if not findings_dicts:
         print("[ERROR] No findings to process", file=sys.stderr)
         sys.exit(1)
-    
-    # Step 2: Apply Policy Filter BEFORE LLM classification
-    print("[2/5] Applying organizational security policies")
+
+    # Step 2: Enrich findings with CVSS scores (compute missing scores, validate existing)
+    print("[2/6] Enriching findings with CVSS scores")
+    try:
+        from cvss_calculator import enrich_finding_with_cvss
+
+        enriched_findings = []
+        cvss_computed_count = 0
+        cvss_validated_count = 0
+        cvss_failed_count = 0
+
+        for finding in findings_dicts:
+            try:
+                enriched = enrich_finding_with_cvss(finding)
+                enriched_findings.append(enriched)
+
+                # Track enrichment statistics
+                if enriched.get('cvss_source') == 'computed':
+                    cvss_computed_count += 1
+                elif enriched.get('cvss_validated'):
+                    cvss_validated_count += 1
+            except Exception as e:
+                # On error, keep original finding
+                enriched_findings.append(finding)
+                cvss_failed_count += 1
+
+        findings_dicts = enriched_findings
+
+        print(f"      ✅ CVSS enrichment complete:")
+        print(f"         Computed: {cvss_computed_count} | Validated: {cvss_validated_count} | Failed: {cvss_failed_count}")
+        print()
+
+    except ImportError:
+        print(f"      [WARNING] CVSS calculator not available", file=sys.stderr)
+        print("      Continuing with original CVSS scores from scan...", file=sys.stderr)
+        print()
+
+    # Step 3: Apply Policy Filter BEFORE LLM classification
+    print("[3/6] Applying organizational security policies")
     
     try:
         from policy_engine import PolicyEngine, apply_policy_filter, create_default_policy_rules, emit_policy_metrics
@@ -389,8 +425,8 @@ def main() -> None:
         print("      Continuing without policy filtering...", file=sys.stderr)
         print()
     
-    # Step 3: Classify findings using LLM with business context
-    print("[3/5] Classifying findings with LLM")
+    # Step 4: Classify findings using LLM with business context
+    print("[4/6] Classifying findings with LLM")
     print(f"      Environment: {business_context['environment']}")
     print(f"      Excluded ports: {business_context['excluded_ports']}")
     print(f"      Critical services: {business_context['critical_services']}")
@@ -488,13 +524,13 @@ def main() -> None:
 
     print()
     
-    # Step 4: Apply feasibility filter
-    print("[4/6] Applying feasibility filter")
+    # Step 5: Apply feasibility filter
+    print("[5/6] Applying feasibility filter")
     feasible, non_feasible = feasibility_filter.split_feasible(classified)
     print(f"      Feasible: {len(feasible)} | Manual review: {len(non_feasible)}\n")
     
-    # Step 5: Initialize exploit tasks (Phase 4)
-    print("[5/6] Initializing exploit tasks")
+    # Step 6: Initialize exploit tasks (Phase 4)
+    print("[6/6] Initializing exploit tasks")
     try:
         import task_manager
         
@@ -515,8 +551,8 @@ def main() -> None:
         print("      Skipping task initialization...", file=sys.stderr)
         print()
     
-    # Step 6: Generate report
-    print("[6/6] Generating experiment report")
+    # Generate final report
+    print("[*] Generating experiment report")
     all_findings = feasible + non_feasible
     report = generate_report(input_file, all_findings, feasible, non_feasible)
     print(f"      Report generated successfully\n")
