@@ -108,7 +108,171 @@ class PolicyEngine:
     def get_rule_count(self) -> int:
         """Return total number of rules in engine."""
         return len(self.rules)
-    
+
+    def detect_conflicts(self, test_samples: list[dict] = None) -> dict:
+        """
+        Detect potential conflicts between policy rules.
+
+        Conflict types detected:
+        1. Same precedence, different actions on same finding
+        2. Shadowed rules (higher precedence rule always matches first)
+        3. Unreachable rules (never match due to earlier rules)
+
+        Args:
+            test_samples: Optional list of sample findings to test rules against.
+                         If None, only detects logical conflicts.
+
+        Returns:
+            Dictionary with conflict analysis:
+            {
+                'conflicts': [{'type': str, 'rules': [], 'description': str}],
+                'total_conflicts': int,
+                'shadowed_rules': [rule_id, ...],
+                'unreachable_rules': [rule_id, ...]
+            }
+        """
+        conflicts = []
+        shadowed_rules = set()
+        unreachable_rules = set()
+
+        # Check for same-precedence conflicts
+        by_precedence = {}
+        for rule in self.rules:
+            if rule.precedence not in by_precedence:
+                by_precedence[rule.precedence] = []
+            by_precedence[rule.precedence].append(rule)
+
+        # For each precedence level, check for conflicting actions
+        for precedence, rules_at_level in by_precedence.items():
+            if len(rules_at_level) < 2:
+                continue
+
+            # Group by action type
+            by_action = {}
+            for rule in rules_at_level:
+                if rule.type not in by_action:
+                    by_action[rule.type] = []
+                by_action[rule.type].append(rule)
+
+            # If we have multiple action types at same precedence, check for overlap
+            if len(by_action) > 1:
+                # We need test samples to detect actual conflicts
+                if test_samples:
+                    for sample in test_samples:
+                        matching_rules = [r for r in rules_at_level if r.evaluate(sample)]
+
+                        if len(matching_rules) > 1:
+                            # Check if they have different actions
+                            action_types = set(r.type for r in matching_rules)
+                            if len(action_types) > 1:
+                                conflicts.append({
+                                    'type': 'same_precedence_conflict',
+                                    'precedence': precedence,
+                                    'rules': [r.rule_id for r in matching_rules],
+                                    'actions': [r.type for r in matching_rules],
+                                    'description': f"Rules {[r.rule_id for r in matching_rules]} at precedence {precedence} have different actions for the same finding"
+                                })
+
+        # Check for shadowed rules (rule B always matches when A matches, and A has higher precedence)
+        for i, rule_a in enumerate(self.rules):
+            for rule_b in self.rules[i+1:]:  # Only check later rules (lower precedence)
+                if rule_a.precedence < rule_b.precedence:
+                    # Check if rule_a shadows rule_b using test samples
+                    if test_samples:
+                        b_matches_without_a = False
+                        for sample in test_samples:
+                            if rule_b.evaluate(sample) and not rule_a.evaluate(sample):
+                                b_matches_without_a = True
+                                break
+
+                        if not b_matches_without_a and any(rule_b.evaluate(s) for s in test_samples):
+                            # rule_b never matches unless rule_a also matches
+                            # This means rule_a always takes precedence
+                            shadowed_rules.add(rule_b.rule_id)
+                            conflicts.append({
+                                'type': 'shadowed_rule',
+                                'shadowing_rule': rule_a.rule_id,
+                                'shadowed_rule': rule_b.rule_id,
+                                'description': f"Rule {rule_b.rule_id} is shadowed by higher-precedence rule {rule_a.rule_id}"
+                            })
+
+        # Check for unreachable rules (never match any test samples)
+        if test_samples:
+            for rule in self.rules:
+                if not any(rule.evaluate(sample) for sample in test_samples):
+                    unreachable_rules.add(rule.rule_id)
+                    conflicts.append({
+                        'type': 'unreachable_rule',
+                        'rule': rule.rule_id,
+                        'description': f"Rule {rule.rule_id} never matches any test samples (may be too specific)"
+                    })
+
+        return {
+            'conflicts': conflicts,
+            'total_conflicts': len(conflicts),
+            'shadowed_rules': list(shadowed_rules),
+            'unreachable_rules': list(unreachable_rules)
+        }
+
+    def print_conflict_report(self, conflict_report: dict) -> None:
+        """
+        Print human-readable conflict detection report.
+
+        Args:
+            conflict_report: Report from detect_conflicts()
+        """
+        print("\n" + "=" * 70)
+        print("POLICY RULE CONFLICT DETECTION REPORT")
+        print("=" * 70)
+
+        if conflict_report['total_conflicts'] == 0:
+            print("✓ No conflicts detected")
+            print("=" * 70 + "\n")
+            return
+
+        print(f"⚠ Found {conflict_report['total_conflicts']} potential conflicts\n")
+
+        # Group by conflict type
+        by_type = {}
+        for conflict in conflict_report['conflicts']:
+            ctype = conflict['type']
+            if ctype not in by_type:
+                by_type[ctype] = []
+            by_type[ctype].append(conflict)
+
+        # Print same-precedence conflicts
+        if 'same_precedence_conflict' in by_type:
+            print(f"Same-Precedence Conflicts ({len(by_type['same_precedence_conflict'])}):")
+            print("-" * 70)
+            for conf in by_type['same_precedence_conflict']:
+                print(f"  Precedence {conf['precedence']}:")
+                for rule_id, action in zip(conf['rules'], conf['actions']):
+                    print(f"    - {rule_id}: {action}")
+                print(f"  ⚠ {conf['description']}\n")
+
+        # Print shadowed rules
+        if 'shadowed_rule' in by_type:
+            print(f"\nShadowed Rules ({len(by_type['shadowed_rule'])}):")
+            print("-" * 70)
+            for conf in by_type['shadowed_rule']:
+                print(f"  {conf['shadowed_rule']} ← shadowed by {conf['shadowing_rule']}")
+                print(f"  ⚠ {conf['description']}\n")
+
+        # Print unreachable rules
+        if 'unreachable_rule' in by_type:
+            print(f"\nUnreachable Rules ({len(by_type['unreachable_rule'])}):")
+            print("-" * 70)
+            for conf in by_type['unreachable_rule']:
+                print(f"  {conf['rule']}")
+                print(f"  ⚠ {conf['description']}\n")
+
+        print("=" * 70)
+        print("RECOMMENDATIONS:")
+        print("  - Review same-precedence conflicts and adjust precedence levels")
+        print("  - Consider removing or re-ordering shadowed rules")
+        print("  - Verify unreachable rules are not too restrictive")
+        print("=" * 70 + "\n")
+
     def get_rules_by_type(self) -> dict[str, int]:
         """
         Get breakdown of rules by type.
