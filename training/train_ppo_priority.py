@@ -449,9 +449,10 @@ def train_ppo_masked(
     # Initialize priority masker
     print(f"Loading priority masker...")
     print(f"  - Experiment report: {experiment_report}")
-    print(f"  - Exploits manifest: {exploits_manifest}\n")
+    print(f"  - Exploits manifest: {exploits_manifest}")
+    print(f"  - Mode: SEQUENTIAL (one-by-one, highest priority only)\n")
     
-    masker = PriorityMasker(experiment_report, exploits_manifest)
+    masker = PriorityMasker(experiment_report, exploits_manifest, sequential_mode=True)
     
     # Show initial status
     masker.print_status()

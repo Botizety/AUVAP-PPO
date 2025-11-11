@@ -7,6 +7,39 @@ This module implements a dynamic masking system that:
 2. Prioritizes vulnerabilities by CVSS, feasibility, and attack chain
 3. Creates action masks for PPO based on dependencies and priorities
 4. Enables sequential execution of exploits in optimal order
+
+Two Execution Modes:
+--------------------
+
+SEQUENTIAL MODE (default, recommended):
+  - Only unmasks the SINGLE highest-priority task at a time
+  - PPO must complete (or fail) current task before moving to next
+  - Mimics real pentesting workflow: focus on critical targets first
+  - Forces PPO to learn optimal priority ordering
+  - Example: If 10 vulnerabilities available, only show the most critical one
+  
+  Behavior:
+    Step 1: Unmask task with priority=95 (CVE-2017-0144, CVSS 9.8)
+            PPO tries exploit → SUCCESS
+    Step 2: Unmask task with priority=87 (CVE-2021-41773, CVSS 7.5)
+            PPO tries exploit → SUCCESS
+    Step 3: Unmask task with priority=75 (CVE-2020-1938, CVSS 7.5)
+            ...and so on
+
+PARALLEL MODE (alternative):
+  - Unmasks ALL available tasks simultaneously
+  - PPO can choose any task that meets dependencies
+  - More flexible but may not follow optimal priority order
+  - Useful for multi-agent or parallel execution scenarios
+  - Example: If 10 vulnerabilities available, show all 10
+
+Usage:
+------
+  # Sequential mode (one-by-one)
+  masker = PriorityMasker(report, manifest, sequential_mode=True)
+  
+  # Parallel mode (all available)
+  masker = PriorityMasker(report, manifest, sequential_mode=False)
 """
 
 import json
@@ -63,18 +96,23 @@ class PriorityMasker:
     
     def __init__(self, 
                  experiment_report_path: str,
-                 exploits_manifest_path: str):
+                 exploits_manifest_path: str,
+                 sequential_mode: bool = True):
         """
         Initialize priority masker with reports.
         
         Args:
             experiment_report_path: Path to results/experiment_report_*.json
             exploits_manifest_path: Path to exploits/exploits_*/exploits_manifest.json
+            sequential_mode: If True, only unmask highest-priority task at a time (one-by-one).
+                           If False, unmask all available tasks (parallel execution).
         """
         print(f"\n[Priority Masker] Initializing...")
+        print(f"  - Mode: {'SEQUENTIAL (one-by-one)' if sequential_mode else 'PARALLEL (all available)'}")
         print(f"  - Loading experiment report: {experiment_report_path}")
         print(f"  - Loading exploits manifest: {exploits_manifest_path}")
         
+        self.sequential_mode = sequential_mode
         self.tasks = self._load_and_prioritize(
             experiment_report_path,
             exploits_manifest_path
@@ -306,9 +344,13 @@ class PriorityMasker:
             'language': 'python'
         }
     
-    def get_action_mask(self) -> np.ndarray:
+    def get_action_mask(self, sequential_mode: bool = True) -> np.ndarray:
         """
         Generate binary mask for current state.
+        
+        Args:
+            sequential_mode: If True, only unmask the single highest-priority task.
+                           If False, unmask all available tasks (original behavior).
         
         Returns:
             np.ndarray: Shape (num_tasks,) where:
@@ -317,10 +359,13 @@ class PriorityMasker:
         """
         mask = np.zeros(len(self.tasks), dtype=np.int8)
         
+        # Find all available tasks first
+        available_tasks = []
+        
         for i, task in enumerate(self.tasks):
             # Skip completed tasks
             if task.is_completed:
-                mask[i] = 0
+                task.is_available = False
                 continue
             
             # Check if dependencies are satisfied
@@ -336,13 +381,32 @@ class PriorityMasker:
             has_creds = not task.requires_auth or \
                        task.host in self.compromised_credentials
             
-            # Enable action if all conditions met
+            # Mark as available if all conditions met
             if deps_satisfied and has_access and has_creds:
-                mask[i] = 1
                 task.is_available = True
+                available_tasks.append((i, task))
             else:
-                mask[i] = 0
                 task.is_available = False
+        
+        if not available_tasks:
+            return mask
+        
+        if sequential_mode:
+            # SEQUENTIAL MODE: Only unmask the single highest-priority task
+            # Tasks are already sorted by priority, so first available is highest
+            highest_priority_idx, highest_priority_task = available_tasks[0]
+            mask[highest_priority_idx] = 1
+            
+            print(f"[Sequential Masking] Only 1 action available:")
+            cve_display = highest_priority_task.cve if highest_priority_task.cve else "NO_CVE"
+            print(f"  → {cve_display} @ {highest_priority_task.host}:{highest_priority_task.port} "
+                  f"(Priority: {highest_priority_task.priority_score:.1f})")
+        else:
+            # PARALLEL MODE: Unmask all available tasks (original behavior)
+            for idx, task in available_tasks:
+                mask[idx] = 1
+            
+            print(f"[Parallel Masking] {len(available_tasks)} actions available")
         
         return mask
     
@@ -390,20 +454,25 @@ class PriorityMasker:
                 if task.host.startswith(subnet):
                     self.current_access.add(task.host)
     
-    def get_next_action(self) -> Tuple[Optional[int], Optional[PrioritizedTask]]:
+    def get_next_action(self, sequential_mode: bool = True) -> Tuple[Optional[int], Optional[PrioritizedTask]]:
         """
         Get highest priority available action.
+        
+        Args:
+            sequential_mode: If True, only return the single highest-priority task.
+                           If False, PPO can choose from all available tasks.
         
         Returns:
             (action_index, task): Next action to execute, or (None, None) if none available
         """
-        mask = self.get_action_mask()
+        mask = self.get_action_mask(sequential_mode=sequential_mode)
         available_indices = np.where(mask == 1)[0]
         
         if len(available_indices) == 0:
             return None, None
         
-        # Return first available (already sorted by priority)
+        # In sequential mode, only 1 action is unmasked (highest priority)
+        # In parallel mode, return first available (already sorted by priority)
         action_idx = int(available_indices[0])
         return action_idx, self.tasks[action_idx]
     
@@ -417,6 +486,7 @@ class PriorityMasker:
         """Print current task status for debugging"""
         print("\n" + "="*70)
         print("PRIORITY-MASKED TASK LIST")
+        print(f"Mode: {'SEQUENTIAL (one-by-one)' if self.sequential_mode else 'PARALLEL (all available)'}")
         print("="*70)
         print(f"Progress: {len(self.completed_tasks)}/{len(self.tasks)} completed")
         print(f"Network Access: {len(self.current_access)} hosts accessible")
@@ -468,25 +538,39 @@ def main():
     import sys
     
     if len(sys.argv) < 3:
-        print("Usage: python priority_masking.py <experiment_report.json> <exploits_manifest.json>")
-        print("\nExample:")
+        print("Usage: python priority_masking.py <experiment_report.json> <exploits_manifest.json> [--parallel]")
+        print("\nModes:")
+        print("  Sequential (default): Only unmask highest-priority task at a time (one-by-one)")
+        print("  Parallel (--parallel): Unmask all available tasks simultaneously")
+        print("\nExample (Sequential - recommended):")
         print("  python priority_masking.py \\")
         print("    results/experiment_report_20251111_023313.json \\")
         print("    exploits/exploits_20251111_023313/exploits_manifest.json")
+        print("\nExample (Parallel):")
+        print("  python priority_masking.py \\")
+        print("    results/experiment_report_20251111_023313.json \\")
+        print("    exploits/exploits_20251111_023313/exploits_manifest.json \\")
+        print("    --parallel")
         sys.exit(1)
     
     report_path = sys.argv[1]
     manifest_path = sys.argv[2]
     
+    # Check for mode flag
+    sequential_mode = True
+    if len(sys.argv) > 3 and sys.argv[3] == '--parallel':
+        sequential_mode = False
+    
     # Initialize masker
-    masker = PriorityMasker(report_path, manifest_path)
+    masker = PriorityMasker(report_path, manifest_path, sequential_mode=sequential_mode)
     
     # Show initial status
     masker.print_status()
     
     # Simulate sequential execution
     print("\n" + "="*70)
-    print("SIMULATING SEQUENTIAL ATTACK EXECUTION")
+    print("SIMULATING ATTACK EXECUTION")
+    print(f"Mode: {'SEQUENTIAL (PPO tries highest priority only)' if sequential_mode else 'PARALLEL (PPO can choose any available)'}")
     print("="*70)
     
     step = 0
